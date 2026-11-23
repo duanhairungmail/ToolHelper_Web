@@ -2,9 +2,11 @@
 
 调试工具助手 Web 版，将远程连接、数据库连接、接口验证、设备调试及运维工具集中到统一工作台。
 
-项目基于 Vue 3 和 Vite，采用 Composition API、Vue Router 和组件化布局。当前已搭建前端基础架构、13 个工具入口及部分交互原型，后续可在现有结构上逐步接入实际业务能力。
+项目基于 Vue 3 和 Vite，采用 Composition API、Vue Router 和组件化布局。已搭建 13 个工具入口；阶段 1 新增 Java 本机服务，接入 electerm 插件管理与 SSH/SFTP/RDP/VNC 连接请求。
 
-> 当前版本以界面与交互演示为主，尚未接入真实的远程连接、串口通信、数据库连接或系统运维服务。界面中的成功提示和示例数据不代表实际操作已执行；AES 页面也尚未实现真正的 AES 加解密。
+> 远程外挂页面已调用真实 Java API；连接与认证由 electerm 完成，接口成功仅表示已提交请求，四协议真实服务验收尚待完成。其他工具仍主要是界面原型，示例数据和成功提示不代表实际操作；AES 页面尚未实现真正的 AES 加解密。
+
+阶段 1 仅支持 **Windows x64 当前登录用户的桌面会话**。Java、浏览器和 electerm 必须位于同一台电脑；将 Java 部署到远端服务器不能打开浏览器所在电脑的外挂。运行、接口及验收说明见 [Java 本机服务文档](backend-java/README.md)。
 
 ## 技术栈
 
@@ -16,7 +18,10 @@
 | 开发语言 | JavaScript，ES Modules |
 | 全局状态 | Vue `reactive` + `provide/inject`，未引入 Pinia |
 | 样式 | 原生 CSS、CSS 变量、Grid/Flex 和媒体查询 |
-| 请求基础 | 原生 `fetch` 封装，尚未被工具业务调用 |
+| 请求基础 | 原生 `fetch`、内存 session、业务错误码与请求标识 |
+| 本机后端 | Java 21、Maven、Spring Boot 4.2.0 |
+| 插件解压 | Apache Commons Compress 1.28.0，TAR.GZ / ZIP |
+| 任务与存储 | 单任务互斥、JSON 元数据、切换记录；不依赖数据库 |
 | 依赖管理 | npm，使用 `package-lock.json` 锁定依赖 |
 
 项目当前没有引入 UI 组件库或额外的业务运行时依赖。
@@ -27,7 +32,7 @@
 
 | 工具 | 路由 | 当前实现 |
 | --- | --- | --- |
-| 远程外挂连接 | `/tools/remote` | 插件管理、连接表单、协议默认端口切换及日志演示；未接入 SSH/SFTP/RDP/VNC |
+| 远程外挂连接 | `/tools/remote` | Java 插件管理、真实状态与任务轮询、四协议参数传递；当前适配 electerm 5.12.6，真实协议连接待验收 |
 | 数据库外挂连接 | `/tools/database` | 插件管理、连接表单及日志演示；未接入数据库服务 |
 | 极早期接口验证 | `/tools/api` | 通用控制台占位；未实现 HTTP/MQTT 请求收发 |
 | 获取设备 MAC 地址 | `/tools/mac` | 通用控制台占位；未实现设备发现与 MAC 获取 |
@@ -45,6 +50,7 @@
 
 - Node.js：满足 `^20.19.0 || >=22.12.0`，与当前 Vite 及其 Vue 插件的要求一致。
 - npm：用于安装依赖和执行项目脚本。
+- 远程外挂功能另需 Java 21、Maven 3.9+、Windows x64；本机须能访问 electerm 官方 GitHub Releases。
 
 可先检查本机环境：
 
@@ -62,7 +68,13 @@ npm ci
 npm run dev
 ```
 
-浏览器访问终端输出的地址。访问根路径 `/` 时会自动跳转到 `/tools/remote`。
+浏览器访问 `http://127.0.0.1:5173`，根路径自动跳转到 `/tools/remote`。另开终端在项目根目录启动 Java：
+
+```powershell
+mvn -f backend-java/pom.xml spring-boot:run
+```
+
+默认 API 为 `127.0.0.1:18081`，Vite 将 `/api` 代理到该服务；未启动 Java 时远程页面明确显示“本机服务不可用”。端口被占用时启动失败，不自动换端口。
 
 已有本地项目时，直接在项目根目录执行 `npm ci` 和 `npm run dev`。有意调整依赖后，应同步提交更新后的 `package.json` 与 `package-lock.json`。
 
@@ -73,15 +85,19 @@ npm run dev
 | `npm run dev` | 启动 Vite 开发服务 |
 | `npm run build` | 执行生产构建，输出到 `dist/` |
 | `npm run preview` | 本地预览已有的生产构建产物 |
+| `npm test` | 使用 Node 内建 test runner 验证请求与远程任务状态逻辑 |
 
-开发服务和预览服务均配置了 `--host 0.0.0.0`。具体地址及端口以终端输出为准。
+开发及预览服务均监听 `127.0.0.1:5173`。API 代理额外检查客户端 loopback 地址；不要向局域网或公网暴露本机进程管理接口。Vite 已排除后端、缓存和运行数据目录的文件监视，避免 Windows 切换安装目录时被占用。
 
-项目当前尚未配置自动化测试、lint 或类型检查脚本。构建成功仅说明应用可以打包，不代表各工具已具备真实业务能力。
+已添加前端请求/状态测试及后端业务/HTTP 测试，未新增 lint 或类型检查工具。自动化测试通过不等于远程认证、GUI 或实际服务已验收。
 
 ## 项目结构
 
 ```text
 ToolHelper_Web/
+├── backend-java/                     # 阶段 1 Java 本机服务，详见该目录 README
+│   ├── pom.xml
+│   └── src/{main,test}/
 ├── public/
 │   ├── favicon.ico
 │   └── logo.png
@@ -95,8 +111,11 @@ ToolHelper_Web/
 │   │   ├── AppStatusBar.vue           # 全局状态提示
 │   │   ├── BasePanel.vue              # 公共内容面板
 │   │   ├── LogDrawer.vue              # 公共日志抽屉
+│   │   ├── RemoteTool.vue             # 真实远程外挂管理与连接表单
 │   │   └── ToolContent.vue            # 各工具的内容分支与交互逻辑
 │   ├── composables/useLogDrawer.js    # 日志与抽屉状态复用
+│   ├── composables/useRemotePlugin.js # 本机状态、互斥交互、任务接续与轮询
+│   ├── api/remotePlugin.js            # 受控 API 与内存 session
 │   ├── config/tools.js                # 工具定义与分组
 │   ├── layouts/AppLayout.vue          # 工作台布局
 │   ├── router/index.js                # 根据工具配置生成路由
@@ -115,12 +134,13 @@ ToolHelper_Web/
 ├── LICENSE
 ├── package.json
 ├── package-lock.json
+├── tests/                            # Node 内建测试，无额外前端测试依赖
 ├── README.md
 ├── server.mjs                        # 遗留静态服务，默认 HTML 入口当前缺失
 └── vite.config.js
 ```
 
-`node_modules/`、`dist/`、日志和 `*.local` 文件已由 `.gitignore` 排除。
+`node_modules/`、`dist/`、`backend-java/target/`、`.m2-cache/`、`.runtime/`、日志和 `*.local` 文件已由 `.gitignore` 排除。真实用户数据、官方插件包和临时测试数据不应提交到 Git。
 
 ## 架构与开发入口
 
@@ -140,8 +160,9 @@ tools.js ──→ router/index.js ──→ ToolView.vue
 
 - `stores/app.js`：通过 `reactive` 定义共享状态，由入口注入；组件使用 `useAppStore()` 获取。当前只管理侧边栏开关与状态栏消息。
 - `ToolContent.vue`：通过 `ref` 管理表单、弹窗、SQL 条件及演示结果等页面状态。
+- `RemoteTool.vue` → `useRemotePlugin.js` → `api/remotePlugin.js`：远程插件独立接入 Java，其余工具分支保留原有原型。
 - `useLogDrawer.js`：管理日志数组、展开状态、追加与清空操作；`LogDrawer.vue` 负责展示。
-- `utils/request.js`：提供基础 `fetch` 和 JSON 响应处理，尚未配置业务 API 地址、认证或开发代理。
+- `utils/request.js`：处理 JSON、超时和业务错误，保留错误码及请求标识；副作用请求失败不会自动重放。
 - `assets/styles/main.css`：统一定义主题变量、布局、表单、面板、弹窗与响应式样式。
 
 ### 新增或完善工具
@@ -165,7 +186,15 @@ npm run build
 npm run preview
 ```
 
-部署时将 `dist/` 内容交给静态文件服务器托管；`npm run preview` 用于本地检查构建结果。
+仅预览界面时可使用 `npm run preview`。阶段 1 推荐将前端构建产物打入 Java JAR，在本机同源访问：
+
+```powershell
+npm run build
+mvn -f backend-java/pom.xml clean package
+java -jar backend-java/target/toolhelper-local-service-0.1.0.jar
+```
+
+随后访问 `http://127.0.0.1:18081`。Maven 在资源阶段复制已有 `dist/`；修改前端后必须重新构建前端并打包 Java。需要单独托管前端时，静态页面仍须通过本机服务及受控代理调用 API，不能把本机能力直接部署成公网服务。
 
 路由使用 HTML5 History 模式，服务器需要在直接访问 `/tools/remote` 等前端路由时回退到 `index.html`。例如，在静态站点根目录指向 `dist/` 的 Nginx 站点中，可配置：
 

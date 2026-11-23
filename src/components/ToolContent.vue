@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import BasePanel from './BasePanel.vue'
 import LogDrawer from './LogDrawer.vue'
+import RemoteTool from './RemoteTool.vue'
 import { useLogDrawer } from '@/composables/useLogDrawer'
 import { useAppStore } from '@/stores/app'
 
@@ -9,7 +10,6 @@ const props = defineProps({ toolId: { type: String, required: true } })
 const store = useAppStore()
 const { expanded, lines, append, clear } = useLogDrawer(['[10:24:18] 页面已就绪'])
 const connected = ref(false)
-const protocol = ref('SSH')
 const port = ref('22')
 const serialText = ref('')
 const serialLogs = ref([])
@@ -25,11 +25,7 @@ const pingTarget = ref('')
 const pingTotal = ref(0)
 
 const hasLog = computed(() => ['remote', 'database', 'nodered', 'kylin'].includes(props.toolId))
-const pluginTitle = computed(() => props.toolId === 'database' ? '数据库连接' : '外挂连接')
-
-function changeProtocol() {
-  port.value = ({ SSH: '22', SFTP: '22', RDP: '3389', VNC: '5900' })[protocol.value]
-}
+const pluginTitle = '数据库连接'
 
 function runAction(message) {
   append(message)
@@ -63,11 +59,12 @@ function scanPing() {
 
 <template>
   <div class="tool-screen" :class="{ 'with-log': hasLog }" :data-od-id="`${toolId}-screen`">
-    <template v-if="toolId === 'remote' || toolId === 'database'">
+    <RemoteTool v-if="toolId === 'remote'" />
+    <template v-else-if="toolId === 'database'">
       <BasePanel title="插件管理"><template #actions><span class="badge warn">未安装</span></template><div class="button-row"><button class="btn btn-primary" @click="runAction('下载插件')">下载插件</button><button class="btn btn-secondary" @click="runAction('启动外挂')">启动外挂</button><button class="btn btn-secondary" @click="runAction('插件更新')">插件更新</button><button class="btn btn-secondary" @click="runAction('删除插件')">删除插件</button><button class="btn btn-secondary">打开所在目录</button></div></BasePanel>
       <BasePanel :title="pluginTitle" description="协议或类型切换会自动填充默认端口。">
         <div class="form-grid">
-          <label class="field"><span>{{ toolId === 'database' ? '类型' : '协议' }}</span><select v-if="toolId === 'remote'" v-model="protocol" class="input" @change="changeProtocol"><option>SSH</option><option>SFTP</option><option>RDP</option><option>VNC</option></select><select v-else class="input"><option>MySQL</option><option>PostgreSQL</option></select></label>
+          <label class="field"><span>类型</span><select class="input"><option>MySQL</option><option>PostgreSQL</option></select></label>
           <label class="field"><span>主机</span><input class="input" placeholder="IP 或主机名"></label>
           <label class="field"><span>端口</span><input v-model="port" class="input"></label>
           <label class="field"><span>用户名</span><input class="input" placeholder="可选"></label>

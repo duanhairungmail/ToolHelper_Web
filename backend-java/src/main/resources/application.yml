@@ -1,0 +1,38 @@
+server:
+  address: 127.0.0.1
+  port: ${TOOLHELPER_PORT:18081}
+  shutdown: graceful
+  error:
+    include-message: never
+    include-stacktrace: never
+spring:
+  application:
+    name: toolhelper-local-service
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+      accept-float-as-int: false
+toolhelper:
+  data-root: ${TOOLHELPER_DATA_ROOT:}
+  allowed-origins:
+    - http://127.0.0.1:5173
+    - http://localhost:5173
+  supported-versions:
+    - 5.12.6
+  max-download-bytes: 536870912
+  max-extracted-bytes: 2147483648
+  max-entry-bytes: 1073741824
+  max-archive-entries: 30000
+  max-path-depth: 24
+  max-user-data-bytes: 2147483648
+  task-retention-days: 7
+  max-task-records: 1000
+logging:
+  file:
+    name: ${TOOLHELPER_LOG_FILE:${TOOLHELPER_DATA_ROOT:${LOCALAPPDATA:${user.home}}/ToolHelper_Web}/logs/service.log}
+  logback:
+    rollingpolicy:
+      max-file-size: 10MB
+      max-history: 7

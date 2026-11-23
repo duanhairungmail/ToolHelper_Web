@@ -2,3 +2,6 @@ node_modules/
 dist/
 *.local
 *.log
+backend-java/target/
+.m2-cache/
+.runtime/
