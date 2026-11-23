@@ -84,8 +84,7 @@ npm run dev
 ToolHelper_Web/
 ├── public/
 │   ├── favicon.ico
-│   ├── logo.png
-│   └── toolhelper-interface-demo.html  # 独立的旧版 HTML 演示页
+│   └── logo.png
 ├── src/
 │   ├── assets/
 │   │   ├── logo.png
@@ -117,7 +116,7 @@ ToolHelper_Web/
 ├── package.json
 ├── package-lock.json
 ├── README.md
-├── server.mjs                        # 旧版演示页的独立静态服务
+├── server.mjs                        # 遗留静态服务，默认 HTML 入口当前缺失
 └── vite.config.js
 ```
 
@@ -178,15 +177,11 @@ location / {
 
 当前 Vite 未配置子路径部署的 `base`，路由也未指定子路径基址。如果部署在 `/ToolHelper_Web/` 等子路径，需要同时调整资源基址、路由基址及服务器回退规则。
 
-### 旧版 HTML 演示页
+### 遗留静态服务
 
-`public/toolhelper-interface-demo.html` 保留为独立参考原型，当前 Vue 应用不会通过 iframe 加载它。可通过 Vite 服务的 `/toolhelper-interface-demo.html` 访问，也可单独运行：
+`server.mjs` 是独立的遗留静态服务，仅提供 `public/` 中的文件，不提供业务 API，也不用于托管 Vue 的 `dist/` 构建产物。当前 npm 脚本均不依赖它，Vue 应用也不会通过 iframe 加载旧版页面。
 
-```bash
-node server.mjs
-```
-
-此静态服务默认使用 `4173` 端口，可通过环境变量 `PORT` 修改；与 Vite 预览服务同时运行时需避免端口冲突。它只提供 `public/` 中的静态资源，不提供业务 API，也不用于托管 Vue 的 `dist/` 构建产物。
+该服务的根路径仍指向 `toolhelper-interface-demo.html`，但当前 `public/` 中已无此文件，因此直接启动它并访问根路径会返回 404。运行当前项目请使用上文的 `npm run dev` 或 `npm run build` 后的 `npm run preview`。
 
 ## 许可证
 
