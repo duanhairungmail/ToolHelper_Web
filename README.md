@@ -76,6 +76,10 @@ mvn -f backend-java/pom.xml spring-boot:run
 
 默认 API 为 `127.0.0.1:18081`，Vite 将 `/api` 代理到该服务；未启动 Java 时远程页面明确显示“本机服务不可用”。端口被占用时启动失败，不自动换端口。
 
+插件、下载暂存、任务和日志默认保存在本项目的 `.runtime/local-data/`，日志为 `.runtime/local-data/logs/service.log`。VS Code 和 Maven 启动使用项目根目录作为工作目录；JAR 命令也需在项目根目录执行。
+
+外挂版本检查及下载默认跟随本机系统代理规则：有适用的 HTTP 代理时使用代理，没有适用代理时直连，不要求用户安装代理软件。控制台和服务日志中的 `mode=HTTP_PROXY` / `mode=DIRECT` 表示实际选择的路由；代理软件自身的规则由该软件处理。配置与限制见 [下载网络策略](backend-java/README.md#下载网络策略)。
+
 已有本地项目时，直接在项目根目录执行 `npm ci` 和 `npm run dev`。有意调整依赖后，应同步提交更新后的 `package.json` 与 `package-lock.json`。
 
 ### 可用脚本

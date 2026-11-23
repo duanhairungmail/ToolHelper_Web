@@ -49,6 +49,10 @@
       <plugin>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>
+        <configuration>
+          <!-- 与 VS Code、项目根目录的 JAR 启动保持相同的数据目录。 -->
+          <workingDirectory>${project.basedir}/..</workingDirectory>
+        </configuration>
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>

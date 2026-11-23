@@ -15,7 +15,7 @@ spring:
       fail-on-unknown-properties: true
       accept-float-as-int: false
 toolhelper:
-  data-root: ${TOOLHELPER_DATA_ROOT:}
+  data-root: ${TOOLHELPER_DATA_ROOT:.runtime/local-data}
   allowed-origins:
     - http://127.0.0.1:5173
     - http://localhost:5173
@@ -31,7 +31,7 @@ toolhelper:
   max-task-records: 1000
 logging:
   file:
-    name: ${TOOLHELPER_LOG_FILE:${TOOLHELPER_DATA_ROOT:${LOCALAPPDATA:${user.home}}/ToolHelper_Web}/logs/service.log}
+    name: ${TOOLHELPER_LOG_FILE:${toolhelper.data-root}/logs/service.log}
   logback:
     rollingpolicy:
       max-file-size: 10MB

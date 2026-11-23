@@ -25,9 +25,8 @@ public record ToolHelperProperties(
         if (dataRoot != null && !dataRoot.isBlank()) {
             return Path.of(dataRoot).toAbsolutePath().normalize();
         }
-        String local = System.getenv("LOCALAPPDATA");
-        return Path.of(local == null ? System.getProperty("user.home") : local,
-                "ToolHelper_Web").toAbsolutePath().normalize();
+        // 启动工作目录统一为项目根目录，插件、任务与日志随项目保存在本地。
+        return Path.of(".runtime", "local-data").toAbsolutePath().normalize();
     }
 
     public static ToolHelperProperties forTests(Path root) {

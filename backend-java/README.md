@@ -42,21 +42,54 @@ java -jar backend-java/target/toolhelper-local-service-0.1.0.jar
 
 | 配置 | 默认/用途 |
 | --- | --- |
-| `TOOLHELPER_DATA_ROOT` | `%LOCALAPPDATA%\ToolHelper_Web`，插件与任务专用根目录 |
+| `TOOLHELPER_DATA_ROOT` | 项目下 `.runtime/local-data`，插件与任务专用根目录 |
 | `TOOLHELPER_PORT` | `18081`；修改时同步调整 Vite 代理 target |
 | `TOOLHELPER_LOG_FILE` | 数据根的 `logs/service.log`，10 MiB 轮转、保留 7 天 |
 | `--toolhelper.data-root=...` | 命令行指定隔离数据目录 |
-| `--logging.file.name=...` | 命令行指定日志；仅指定 data-root 参数时建议同时指定该项 |
+| `--logging.file.name=...` | 单独指定日志；未指定时自动跟随最终生效的数据根目录 |
 
-例如只在项目内联调：
+默认数据根为 `<项目根目录>/.runtime/local-data`，本项目对应 `D:\DevlopProject\ToolHelper_Web\.runtime\local-data`；安装包暂存、插件、便携用户数据、任务与日志均保存在该目录内。VS Code 的 Java 调试配置和 Maven `spring-boot:run` 已将工作目录固定到项目根目录；执行 JAR 时也应先进入项目根目录。相对数据路径以进程工作目录为基准，不依赖项目在某一盘符上的固定位置。
+
+例如临时指定另一个项目内数据目录，日志自动写入该目录的 `logs/service.log`：
 
 ```powershell
 java -jar backend-java/target/toolhelper-local-service-0.1.0.jar `
-  --toolhelper.data-root="D:\DevlopProject\ToolHelper_Web\.runtime\local-data" `
-  --logging.file.name="D:\DevlopProject\ToolHelper_Web\.runtime\local-service.log"
+  --toolhelper.data-root=".runtime/custom-data"
 ```
 
+旧版本位于 `%LOCALAPPDATA%\ToolHelper_Web` 的数据不会自动搬迁或删除。切换到新默认目录后只读取新目录；如果旧目录已有安装或用户数据，须先停止后端和 electerm，再核对迁移。本次检查旧目录没有 `current/install.json` 安装清单，未迁移旧目录。
+
 `application.yml` 可配置配额：下载 512 MiB、解压总量 2 GiB、单文件 1 GiB、最多 30000 条目/24 层、用户数据 2 GiB、任务 7 天/1000 条。默认预留空间按上限保守估算；不足时停止安装或更新。
+
+### 开发代理与后端启动排查
+
+页面提示 `SERVICE_UNAVAILABLE` 时，先检查 Java 启动日志是否出现 `Started ToolHelperApplication`，并确认实际监听 `127.0.0.1:18081`。Vite 开发/预览代理在连接失败时返回 HTTP 503 JSON；GET 显示服务不可用，POST 保留 `REQUEST_OUTCOME_UNKNOWN`，避免把不确定的操作自动重发。正常业务响应仍按原样转发。
+
+如果 Java 启动失败并提示“已有服务管理该数据目录”，说明有另一个 JVM 持有数据根的进程锁。先核对已有启动终端和进程，再停止对应服务或复用已在正确端口运行的实例；仅修改端口不能解除同一数据目录的互斥。不要通过删除 `service.lock` 或结束所有 Java 进程处理。结束临时验证服务时，须确认实际 JVM 已退出，而不是只结束 Java 启动器。
+
+### 下载网络策略
+
+Java 启动入口在 Spring 和网络客户端初始化前默认启用 `java.net.useSystemProxies=true`。从 VS Code 的 Java 入口运行、Maven `spring-boot:run` 或可执行 JAR 启动，均执行相同初始化；不修改 Windows 设置，不增加第三方依赖。
+
+- 通过 JDK 的系统代理选择器，分别为 GitHub API、安装包地址及重定向后的资产域名选择路由；遵循系统代理和绕过规则，无适用代理时直接下载，不要求用户安装代理软件。
+- 如果代理软件使用规则模式，请求交给系统选择的 HTTP 代理后，再由代理软件判断直连或转发；应用不读取特定代理软件的私有配置。TUN/VPN 下的直连仍可能由系统网络层接管，日志不代表最终出口。
+- 代理不可用时明确返回 `UPSTREAM_CONNECTION_FAILED`，不会自行重试直连。只选择系统返回的首选路由；不探测常见代理端口、不切换镜像，也不修改 TLS 或官方 SHA-256 校验。
+- JDK `HttpClient` 的代理通道使用 HTTP CONNECT 承载 HTTPS。若选择器返回 SOCKS，则报告 `PROXY_TYPE_UNSUPPORTED`，需将系统代理配置为代理软件的 HTTP/Mixed 监听端口；不把 SOCKS 悄悄当作直连。
+- 保留用户显式提供的 JVM `-D` 代理配置；`-Djava.net.useSystemProxies=false` 可关闭系统代理读取。仅设置浏览器扩展、npm/Maven 代理或 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量，不视为已经配置了 Java 的系统代理。自动配置脚本的解析与支持范围由当前 JDK/Windows 的系统代理机制决定。
+
+每个目标首次选路或路由发生变化时，在控制台及服务日志记录 `mode=DIRECT` 或 `mode=HTTP_PROXY proxyHost=... proxyPort=...`，不在选路日志中记录签名下载 URL。该日志表示应用选择的连接方式，不保证代理软件的最终出口或下载速度。
+
+切换本机代理设置后，建议重启 Java 后端并重新检查版本/下载，确保新的系统配置生效；正在传输的连接不会中途切换。若使用已有 JAR，须重新打包才能包含本次修改。
+
+### GitHub API 限流
+
+`GITHUB_RATE_LIMITED` 表示官方版本查询或下载服务返回限流响应，不表示本机代理未生效。GitHub 未认证 REST API 的主配额通常为每个出口 IP 每小时 60 次；共用代理出口的其他请求也可能消耗同一配额，不能仅按本项目的点击次数判断。项目当前未配置 GitHub Token，安装前需要官方 API 返回的发行信息和 SHA-256。
+
+后端遵守 `Retry-After`，主配额耗尽时同时等待 `X-RateLimit-Reset`；两者均无有效未来时间时至少冷却一分钟。页面错误包含预计可重试的本机时间及 UTC 偏移。冷却期间，重复查询在本地返回同一提示，不再访问该域名；到期后由用户重新点击触发查询，不后台自动重试。
+
+冷却按上游域名隔离，并保存在当前进程内存中；已有合法资产选择的安装不因 API 域名冷却而直接中断，但选择仍遵守原来的 15 分钟有效期。重启后端会清除本地冷却记录，不能重置 GitHub 的服务端配额。普通 403 权限响应不误报为限流；上游日志记录状态、配额和恢复时间，便于根据请求标识定位。
+
+出现此错误时，先等到提示时间后再试。应用不会自动关闭代理、轮换节点或使用第三方镜像来规避限流。若使用场景经常触及匿名配额，可另外评估可选的用户 GitHub Token 认证；当前版本尚未实现该配置，不应把 Token 提交到代码库或前端。
 
 ## 3. 分层与数据目录
 
@@ -64,14 +97,14 @@ java -jar backend-java/target/toolhelper-local-service-0.1.0.jar `
 RemoteTool.vue → useRemotePlugin.js → remotePlugin.js
   → LocalRequestFilter → RemotePluginController → RemotePluginService
     ├─ TaskCoordinator：互斥、幂等、持久任务与中断标记
-    ├─ ReleaseClient：官方发行选择与下载校验
+    ├─ ReleaseClient / DownloadProxySelector：官方发行选择、系统代理选路与下载校验
     ├─ ArchiveExtractor：受限 TAR.GZ / ZIP 解压
     ├─ InstallationStore：清单、便携数据、目录切换与恢复
     └─ ProcessAdapter：平台、进程观察、固定参数启动与目录打开
 ```
 
 ```text
-<dataRoot>/
+<项目根目录>/.runtime/local-data/  # 默认 dataRoot
 ├─ service.lock
 ├─ plugins/electerm/
 │  ├─ current/{app/,install.json}
@@ -154,11 +187,15 @@ mvn -f backend-java/pom.xml `
 
 截至 2026-11-23：
 
-- 后端 33 项（含可选官方包验收）通过；不提供该参数时，32 项执行、1 项跳过。
-- 前端 9 项请求和任务生命周期测试通过，Vue 构建及 Java 可执行 JAR 打包通过。
+- 后端常规验证 51 项中 50 项通过、1 项可选官方包验收跳过；此前已单独完成官方包解压验收，本次目录配置修改未重复执行该项。
+- 前端 11 项请求、开发代理和任务生命周期测试通过，Vue 构建及 Java 可执行 JAR 打包通过。
 - 覆盖正式资产与摘要、下载长度/散列、ZIP/TAR 越界与链接/配额/大小写冲突、四协议参数、原生 Windows 进程参数、更新失败保留旧版、切换回滚、用户数据保留、互斥/幂等、重启中断、Host/Origin/session、请求实际长度、未知字段及 HTTP 路由。
 - 官方包实际下载、SHA-256、安全解压、唯一 EXE 和安装清单通过；Java 实际 GitHub 版本检查、开发代理 session、状态接口和打包后的页面 HTTP 响应通过。
 - 浏览器检查开发代理和 JAR 同源页面均正确显示未安装状态；停止隔离测试 Java 服务后，页面显示“本机服务不可用”并禁用插件操作。
+- 新增 10 项代理测试，覆盖无代理直连、按域名绕过、首选路由与变化、不支持的 SOCKS、无效配置、独立 JVM 初始化及本机 HTTP CONNECT 代理集成；新 JAR 在隔离数据目录与随机端口启动后，实际通过 Windows 系统代理完成 GitHub 版本查询，HTTP 200。未重新下载完整安装包，未进行代理/直连速度对比。
+- 新增 6 项限流测试，覆盖主配额恢复时间、冷却期间不重复联网、到期恢复及原有缓存、秒数/HTTP 日期形式的 Retry-After、无效/过期响应头、普通 403 区分和下载域名隔离。实际只读核对了代理出口的 GitHub 403、60/60 已用配额与恢复时间；不会通过反复请求执行真实限流恢复测试。
+- 新增 2 项数据目录测试，验证默认路径不依赖用户目录、显式相对/绝对路径仍生效；HTTP 集成验证只覆盖数据根时日志自动跟随。新 JAR 从项目根目录、不传数据和日志参数启动后，已验证默认目录、日志文件及本机状态接口；随机端口验证进程已停止，未停止原有后端。
+- 新增 2 项 Vite 代理集成测试，覆盖后端未监听、正常业务 JSON 转发及 POST 断线不重发。实际验证 `18081` 直连与 `5173` 代理的会话和状态接口均返回 JSON；停止验证 JVM 后，开发代理返回 `503 SERVICE_UNAVAILABLE`。已核对实际 JVM PID 并确认退出，释放数据目录进程锁。
 
 **尚不能标记为完成的验收：**真实 electerm GUI 启动/目录打开，SSH/SFTP/RDP/VNC 各协议使用实际服务、非默认端口、IPv6/域用户名的连接，首次认证/已有凭据、单实例转交、窗口就绪后再次连接，以及真实 GUI 生成的数据在升级后的可用性。当前没有用户提供的测试目标或凭据，不能把参数和源码验证写成真实连接成功。
 
