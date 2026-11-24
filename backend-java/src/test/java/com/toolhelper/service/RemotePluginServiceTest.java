@@ -115,7 +115,7 @@ class RemotePluginServiceTest {
     private class TestStore extends InstallationStore {
         boolean failAfterNewMove;
         Runnable afterOldMove;
-        TestStore() throws IOException { super(properties, new JsonFiles(json)); }
+        TestStore() throws IOException { super(RemotePluginServiceTest.this.properties, new JsonFiles(RemotePluginServiceTest.this.json)); }
         @Override public void move(Path from, Path to) throws IOException {
             super.move(from, to);
             if (from.equals(current()) && to.startsWith(backupRoot()) && afterOldMove != null) afterOldMove.run();

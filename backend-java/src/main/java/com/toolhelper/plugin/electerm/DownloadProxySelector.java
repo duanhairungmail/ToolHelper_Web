@@ -11,12 +11,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /** 下载专用的代理观察层；遵循系统的首选路由，不探测端口或擅自切换线路。 */
-final class DownloadProxySelector extends ProxySelector {
+public final class DownloadProxySelector extends ProxySelector {
     private static final Logger LOG = LoggerFactory.getLogger(DownloadProxySelector.class);
     private final ProxySelector system;
     private final Map<String, Proxy> reportedRoutes = new ConcurrentHashMap<>();
 
-    DownloadProxySelector(ProxySelector system) {
+    public DownloadProxySelector(ProxySelector system) {
         this.system = system;
     }
 

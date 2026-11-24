@@ -1,6 +1,6 @@
-# 阶段 1：Java 本机服务实现与验收说明
+# Java 本机服务：阶段 1 / 阶段 2 实现与验收说明
 
-更新日期：2026-11-23。状态：功能代码与自动化验证已实现，真实 electerm GUI 和四协议远程服务验收待完成。
+更新日期：2026-11-23。阶段 1 electerm 与阶段 2 DBX 已接入同一个 Java 本机服务。DBX 已完成隔离 MySQL/PostgreSQL 真实连接验证；electerm 四协议真实服务验收仍待完成。第 1～6 节保留阶段 1 说明及历史验证记录，第 7 节说明阶段 2 与当前验证结果。
 
 ## 1. 已实现范围
 
@@ -185,7 +185,7 @@ mvn -f backend-java/pom.xml `
   "-Dtoolhelper.acceptance.archive=D:\DevlopProject\ToolHelper_Web\.runtime\electerm-5.12.6-win-x64-portable.tar.gz" test
 ```
 
-截至 2026-11-23：
+阶段 1 历史验证记录（2026-11-23，阶段 2 当前结果见第 7 节）：
 
 - 后端常规验证 51 项中 50 项通过、1 项可选官方包验收跳过；此前已单独完成官方包解压验收，本次目录配置修改未重复执行该项。
 - 前端 11 项请求、开发代理和任务生命周期测试通过，Vue 构建及 Java 可执行 JAR 打包通过。
@@ -200,3 +200,114 @@ mvn -f backend-java/pom.xml `
 **尚不能标记为完成的验收：**真实 electerm GUI 启动/目录打开，SSH/SFTP/RDP/VNC 各协议使用实际服务、非默认端口、IPv6/域用户名的连接，首次认证/已有凭据、单实例转交、窗口就绪后再次连接，以及真实 GUI 生成的数据在升级后的可用性。当前没有用户提供的测试目标或凭据，不能把参数和源码验证写成真实连接成功。
 
 建议在专用测试目录中安装，通过用户授权的四种测试服务逐项验收；更新验收还需两个已适配发行版。本轮未执行真实用户安装的卸载、系统配置变更或远程推送。
+
+## 7. 阶段 2：DBX 数据库外挂
+
+### 已实现范围与分层
+
+数据库页面 `/tools/database` 已接入五项管理操作，以及 MySQL/PostgreSQL 带参连接。没有新增 Java 数据库驱动或第三方依赖，真实数据库会话由 DBX 建立。
+
+```text
+DatabaseTool.vue → useDatabasePlugin / useDatabaseConnection → databasePlugin.js
+  → LocalRequestFilter → DatabasePluginController → DatabasePluginService
+    ├─ plugin/common：官方传输、发行选择、安装事务、进程基础操作、管理流程
+    ├─ plugin/dbx：DBX 包名、平铺布局、完整 data、固定 EXE 与深链参数
+    └─ LocalDataRoot / TaskCoordinator：共享根锁、任务目录与全局单任务互斥
+```
+
+electerm 保留原接口，由薄适配器复用公共能力。任务新增 `pluginId`；旧任务缺失此字段时按 electerm 读取。页面只接续自身插件任务，另一个插件工作时显示占用。两个仓库的发行缓存和选择 ID 分开，同一上游域名的限流冷却共享，不通过切换插件绕过限流。
+
+### 官方便携包与数据目录
+
+适配仓库 `t8y2/dbx`，白名单发行版本 `0.6.72`，只选择 `DBX_0.6.72_x64-portable.zip`，拒绝同名前缀的 `.zip.sig`。2026-11-23 实际通过 Java 下载并校验的 ZIP：
+
+```text
+大小：45,910,741 字节
+SHA-256：e1fa98463fa89b647f9358ed944d6e1924cee9b2c754c54926de443f722b50a9
+```
+
+包内是五个平铺文件：`DBX.exe`、`portable.dbx`、`portable-update.json`、`LICENSE`、`README.md`。实际 metadata 版本与 EXE FileVersion/ProductVersion 为 **`0.6.72-beta.20261119.2`**，与发行 tag `v0.6.72` 不同。代码采用精确映射并校验 metadata 与 EXE 摘要，状态与安装确认同时展示发行版本和包内版本；不通过忽略 beta 后缀接受未知包。
+
+```text
+<dataRoot>/
+├─ service.lock                    # 两个插件只持有一份根锁
+├─ plugins/electerm/               # 保持阶段 1 布局
+├─ plugins/dbx/
+│  ├─ current/
+│  │  ├─ install.json              # 标识、修订、包文件清单与摘要
+│  │  └─ app/
+│  │     ├─ DBX.exe / portable.dbx / portable-update.json / LICENSE / README.md
+│  │     └─ data/                  # DBX 完整便携数据
+│  │        ├─ dbx.db              # DBX 运行后生成
+│  │        ├─ .dbx/secret.key     # 如有，随完整 data 一起保留
+│  │        └─ webview2/、logs/、tmp/
+│  ├─ staging/<taskId>/
+│  ├─ backup/<taskId>/
+│  ├─ preserved/<taskId>/
+│  └─ transaction.json            # 仅未完成切换存在
+├─ tasks/<taskId>.json
+└─ logs/service.log
+```
+
+默认 `dataRoot` 仍为项目 `.runtime/local-data`。更新完整复制 `data`，保留原安装备份；卸载先保留完整用户数据，再处理受管程序文件。不得只复制 `dbx.db` 而遗漏可能存在的密钥。程序文件摘要变化、外部自更新、未知文件或运行占用会阻止操作，不覆盖未知状态。
+
+启动子进程时移除继承的 `DBX_DATA_DIR`，将 WebView2 用户数据、启动日志和 TEMP/TMP 定位到受管 `data` 子目录。首次受管 `data/dbx.db` 不存在但用户默认 `%APPDATA%/com.dbx.app/dbx.db` 存在时，返回 `DBX_EXISTING_DATA_CONFLICT`，阻止上游隐式导入。Java 不主动注册 URI 协议；未审计 DBX 的全部系统行为，不能据此承诺第三方程序绝不写入其他目录或注册表。
+
+### DBX 接口与密码边界
+
+沿用第 4 节 session、Host/Origin、请求大小、幂等键和错误响应规则。
+
+| 方法 | `/api/v1` 下路径 | 请求/行为 |
+| --- | --- | --- |
+| GET | `/plugins/dbx` | 状态、发行版本、`packageVersion`、目录、进程观察、当前任务 |
+| GET | `/plugins/dbx/update-check` | 官方候选、实际包版本、兼容性、限时选择 ID |
+| POST | `/plugins/dbx/install` | `releaseSelectionId`；返回后台任务 |
+| POST | `/plugins/dbx/update` | `releaseSelectionId`、`expectedInstallRevision`、`confirmed:true` |
+| POST | `/plugins/dbx/uninstall` | `expectedInstallRevision`、`confirmed:true` |
+| POST | `/plugins/dbx/launch` | 空 JSON `{}` |
+| POST | `/plugins/dbx/open-directory` | 空 JSON `{}` |
+| POST | `/plugins/dbx/connect` | 以下连接字段；成功只表示 `CONNECTION_REQUESTED` |
+
+```json
+{
+  "type": "MYSQL",
+  "host": "127.0.0.1",
+  "port": 3306,
+  "username": "example_user",
+  "database": "example_db",
+  "connectionName": "本次连接",
+  "ssl": false
+}
+```
+
+- `type` 仅 `MYSQL` / `POSTGRESQL`；界面默认端口分别 `3306` / `5432`。
+- `host` 支持 IPv4、IPv6 字面量或 ASCII DNS 名，最多 253 字符；端口为 1～65535 的整数，不支持 IPv6 zone ID。
+- 用户名必填；用户名、数据库名、连接名最多 256 字符，密码最多 2048 字符；拒绝控制字符及无效 Unicode，编码后总命令长度也有限制。
+- 密码默认不包含在请求中。用户勾选“本次传递密码”才增加 `password` 字符串，空串与不传不同；发起即清空表单，失败不自动重放，离开页面清空。
+- Java 使用固定受管 EXE 加单个逐字段编码的 `dbx://connection/new?...&one_time=true` 参数，不使用 shell 或系统 URL handler。**显式传入的密码会进入进程命令行；有权限的本机程序可能读取，URI 编码不是加密。**
+- 含密码请求仅在进程内用随机密钥 HMAC 比较幂等；任务 JSON 保存 `EPHEMERAL`，不保存密码、完整 URI 或密码摘要。重启后相同敏感幂等键返回 `REQUEST_OUTCOME_UNKNOWN`，不重新发起连接。
+
+不传密码时 DBX 可能弹出认证对话框，属于预期行为。`one_time` 用于本次连接；本次实测普通连接表和凭据表记录均为 0，但这不是对所有版本、缓存、恢复状态或第三方行为的“完全无痕”保证。TLS 开关传入上游，握手与证书行为仍需实际目标验收。
+
+### 当前验证结果与使用方式
+
+```powershell
+npm test
+npm run build
+mvn -B -ntp -f backend-java/pom.xml `
+  "-Dtoolhelper.dbx.archive=D:\DevlopProject\ToolHelper_Web\.runtime\DBX_0.6.72_x64-portable.zip" test
+```
+
+不指定 `toolhelper.dbx.archive` 时跳过可选 DBX 实包测试。2026-11-23 本轮前端 **17 项通过**；后端 **66 项中 65 项通过、1 项 electerm 可选实包测试跳过**，DBX 实包测试已运行。Vue 生产构建与 Java 可执行 JAR 打包通过。
+
+自动测试覆盖发行/缓存隔离、共享根锁与任务、老任务兼容、密码不落任务与重启不重放、URI 编码和原生 Windows 参数、完整 data/密钥保留、未知文件与外部修改拒绝、更新下载失败及切换失败恢复、HTTP 字段校验，以及阶段 1 回归。
+
+真实验收在独立的 `18082` 服务、项目内 `.runtime/phase2-acceptance` 数据根进行：通过 Java 官方下载链完成 DBX 安装；在隔离 MySQL 8.0.34（`127.0.0.1:23306`）和 PostgreSQL 18.6（`127.0.0.1:25432`）上，用低权限测试角色验证 MySQL 冷启动、运行中转交 PostgreSQL、中文连接名和带中文/特殊字符的密码，无需二次输入；GUI 与两个数据库的服务端会话均核对成功。一次性连接未进入本次普通连接/凭据表。
+
+测试数据库文件位于 `.runtime/phase2-db`，未更改原有 MySQL 业务服务或启动原有 PostgreSQL 系统服务。按用户要求保留 DBX 窗口及支撑它的隔离数据库。最后一次默认不传密码测试停留在 DBX 认证对话框，未自动取消。
+
+**尚待验收：**TLS 真实握手、错误/空密码的真实服务行为、IPv6 真实数据库、缺失或受损 WebView2、快速连续/跨安装转交、重启后一次性会话恢复行为，以及两个真实发行版之间的数据迁移。更新/卸载已验证隔离文件事务，不等于真实跨版本 GUI 迁移验收；数据库页面本轮未补做浏览器视觉验收。
+
+本轮未主动停止原有 `18081` 服务；收尾只读检查时该端口未监听，日常使用需启动新 Java 后端，再刷新前端。验收安装不在默认 `.runtime/local-data` 中；默认页面仍需下载一次 DBX。Windows 下构建前先退出正在运行目标 JAR 的对应 Java 实例，避免 Maven 替换文件失败，不要结束其他 Java 进程。
+
+最终新 JAR 检查中，数据库页面及生产资源、DBX 状态接口通过；版本查询返回 `GITHUB_RATE_LIMITED`，日志显示匿名额度 `60`、剩余 `0`，预计可重试时间为北京时间 `2026-11-23 22:45:43`。该时间不是配额恢复保证，之后仍以上游响应为准，本轮未继续重试。

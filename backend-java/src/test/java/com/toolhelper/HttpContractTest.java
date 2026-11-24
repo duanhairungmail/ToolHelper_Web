@@ -41,6 +41,23 @@ class HttpContractTest {
             var status = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/plugins/electerm"))
                     .header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());
             assertEquals("NOT_INSTALLED", json.readTree(status.body()).path("data").path("state").asText(), status.body());
+            var dbxStatus = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/plugins/dbx"))
+                    .header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, dbxStatus.statusCode(), dbxStatus.body());
+            var dbxData = json.readTree(dbxStatus.body()).path("data");
+            assertEquals("dbx", dbxData.path("pluginId").asText());
+            assertEquals("NOT_INSTALLED", dbxData.path("state").asText());
+            assertTrue(dbxData.path("directory").asText().endsWith("plugins" + java.io.File.separator + "dbx"));
+            for (String body : List.of(
+                    "{\"type\":\"MYSQL\",\"host\":\"localhost\",\"port\":3306,\"username\":\"u\",\"args\":[\"--help\"]}",
+                    "{\"type\":\"POSTGRESQL\",\"host\":\"localhost\",\"port\":5432.5,\"username\":\"u\"}",
+                    "{\"type\":\"MYSQL\",\"host\":\"localhost\",\"port\":3306,\"username\":\"u\",\"url\":\"dbx://custom\"}")) {
+                var invalid = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/plugins/dbx/connect"))
+                        .header("X-ToolHelper-Session", token).header("Idempotency-Key", "dbx-contract-key")
+                        .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
+                assertEquals(400, invalid.statusCode(), invalid.body());
+                assertEquals("INVALID_REQUEST", json.readTree(invalid.body()).path("error").path("code").asText());
+            }
             for (String body : List.of(
                     "{\"protocol\":\"SSH\",\"host\":\"127.0.0.1\",\"port\":22,\"username\":\"u\",\"command\":\"calc\"}",
                     "{\"protocol\":\"SSH\",\"host\":\"127.0.0.1\",\"port\":22.5,\"username\":\"u\"}")) {

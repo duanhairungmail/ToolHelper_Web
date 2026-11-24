@@ -21,6 +21,9 @@ toolhelper:
     - http://localhost:5173
   supported-versions:
     - 5.12.6
+  dbx:
+    supported-versions:
+      - 0.6.72
   max-download-bytes: 536870912
   max-extracted-bytes: 2147483648
   max-entry-bytes: 1073741824

@@ -2,11 +2,11 @@
 
 调试工具助手 Web 版，将远程连接、数据库连接、接口验证、设备调试及运维工具集中到统一工作台。
 
-项目基于 Vue 3 和 Vite，采用 Composition API、Vue Router 和组件化布局。已搭建 13 个工具入口；阶段 1 新增 Java 本机服务，接入 electerm 插件管理与 SSH/SFTP/RDP/VNC 连接请求。
+项目基于 Vue 3 和 Vite，采用 Composition API、Vue Router 和组件化布局。已搭建 13 个工具入口；阶段 1 接入 Java 本机服务与 electerm，阶段 2 接入 DBX 插件管理及 MySQL/PostgreSQL 带参连接。
 
-> 远程外挂页面已调用真实 Java API；连接与认证由 electerm 完成，接口成功仅表示已提交请求，四协议真实服务验收尚待完成。其他工具仍主要是界面原型，示例数据和成功提示不代表实际操作；AES 页面尚未实现真正的 AES 加解密。
+> 远程与数据库外挂页面已调用真实 Java API。数据库功能已使用隔离的 MySQL/PostgreSQL 实例验证带密码连接、冷启动及运行中实例转交；远程四协议真实服务验收仍待完成。接口成功仅表示已提交请求，实际认证和会话结果在外挂中查看。其余工具仍主要是界面原型；AES 页面尚未实现真正的 AES 加解密。
 
-阶段 1 仅支持 **Windows x64 当前登录用户的桌面会话**。Java、浏览器和 electerm 必须位于同一台电脑；将 Java 部署到远端服务器不能打开浏览器所在电脑的外挂。运行、接口及验收说明见 [Java 本机服务文档](backend-java/README.md)。
+当前外挂功能仅支持 **Windows x64 当前登录用户的桌面会话**。Java、浏览器和外挂必须位于同一台电脑；将 Java 部署到远端服务器不能打开浏览器所在电脑的外挂。运行、接口及验收说明见 [Java 本机服务文档](backend-java/README.md)。
 
 ## 技术栈
 
@@ -33,7 +33,7 @@
 | 工具 | 路由 | 当前实现 |
 | --- | --- | --- |
 | 远程外挂连接 | `/tools/remote` | Java 插件管理、真实状态与任务轮询、四协议参数传递；当前适配 electerm 5.12.6，真实协议连接待验收 |
-| 数据库外挂连接 | `/tools/database` | 插件管理、连接表单及日志演示；未接入数据库服务 |
+| 数据库外挂连接 | `/tools/database` | Java 管理 DBX 下载、启动、更新、删除、打开目录；MySQL/PostgreSQL 带参连接，密码显式选择本次传递 |
 | 极早期接口验证 | `/tools/api` | 通用控制台占位；未实现 HTTP/MQTT 请求收发 |
 | 获取设备 MAC 地址 | `/tools/mac` | 通用控制台占位；未实现设备发现与 MAC 获取 |
 | Node-RED 可视化编排 | `/tools/nodered` | 通用控制台及日志占位；未接入 Node-RED 运行时或编辑器 |
@@ -50,7 +50,7 @@
 
 - Node.js：满足 `^20.19.0 || >=22.12.0`，与当前 Vite 及其 Vue 插件的要求一致。
 - npm：用于安装依赖和执行项目脚本。
-- 远程外挂功能另需 Java 21、Maven 3.9+、Windows x64；本机须能访问 electerm 官方 GitHub Releases。
+- 外挂功能另需 Java 21、Maven 3.9+、Windows x64；本机须能访问对应官方 GitHub Releases，DBX 还需可用的 WebView2 Runtime。
 
 可先检查本机环境：
 
@@ -76,6 +76,12 @@ mvn -f backend-java/pom.xml spring-boot:run
 
 默认 API 为 `127.0.0.1:18081`，Vite 将 `/api` 代理到该服务；未启动 Java 时远程页面明确显示“本机服务不可用”。端口被占用时启动失败，不自动换端口。
 
+升级到阶段 2 后，需要启动新 Java 后端（已有实例则先重启），才能加载 `/api/v1/plugins/dbx` 接口；仅刷新前端不能更新运行中的 Java 代码。数据库页面先下载插件，再填写类型、主机、端口、用户名及可选数据库名。MySQL 默认端口 `3306`，PostgreSQL 为 `5432`。
+
+密码默认不传，DBX 可能继续要求认证。勾选“本次传递密码”后，密码随本次连接发给 DBX，发起时清空表单，不自动重试、不写入浏览器存储。**密码会进入 DBX 进程命令行，本机有权限的程序可能读取，URI 编码不是加密。** 不接受该限制时，请在 DBX 中完成认证。
+
+当前 DBX 适配发行 tag `v0.6.72`，已校验官方便携包的实际版本为 `0.6.72-beta.20261119.2`；界面同时展示两者。更新或删除前需要退出 DBX，完整 `data`（包括存在时的密钥文件）会保留。版本白名单不代表未来任意发行包已经兼容。
+
 插件、下载暂存、任务和日志默认保存在本项目的 `.runtime/local-data/`，日志为 `.runtime/local-data/logs/service.log`。VS Code 和 Maven 启动使用项目根目录作为工作目录；JAR 命令也需在项目根目录执行。
 
 外挂版本检查及下载默认跟随本机系统代理规则：有适用的 HTTP 代理时使用代理，没有适用代理时直连，不要求用户安装代理软件。控制台和服务日志中的 `mode=HTTP_PROXY` / `mode=DIRECT` 表示实际选择的路由；代理软件自身的规则由该软件处理。配置与限制见 [下载网络策略](backend-java/README.md#下载网络策略)。
@@ -89,17 +95,19 @@ mvn -f backend-java/pom.xml spring-boot:run
 | `npm run dev` | 启动 Vite 开发服务 |
 | `npm run build` | 执行生产构建，输出到 `dist/` |
 | `npm run preview` | 本地预览已有的生产构建产物 |
-| `npm test` | 使用 Node 内建 test runner 验证请求与远程任务状态逻辑 |
+| `npm test` | 使用 Node 内建 test runner 验证两个插件的请求、任务状态及数据库密码交互 |
 
 开发及预览服务均监听 `127.0.0.1:5173`。API 代理额外检查客户端 loopback 地址；不要向局域网或公网暴露本机进程管理接口。Vite 已排除后端、缓存和运行数据目录的文件监视，避免 Windows 切换安装目录时被占用。
 
 已添加前端请求/状态测试及后端业务/HTTP 测试，未新增 lint 或类型检查工具。自动化测试通过不等于远程认证、GUI 或实际服务已验收。
 
+2026-11-23 阶段 2 验证：前端 17 项通过；后端 66 项中 65 项通过、1 项 electerm 可选实包验收跳过，本次 DBX 实包验收已运行；Vue 构建和 Java 可执行 JAR 打包通过。真实数据库验证使用项目内的独立测试实例，没有修改用户原有业务数据库。TLS 握手、真实跨发行版数据迁移、缺失 WebView2 等场景仍待验收。
+
 ## 项目结构
 
 ```text
 ToolHelper_Web/
-├── backend-java/                     # 阶段 1 Java 本机服务，详见该目录 README
+├── backend-java/                     # electerm / DBX Java 本机服务，详见该目录 README
 │   ├── pom.xml
 │   └── src/{main,test}/
 ├── public/
@@ -114,12 +122,17 @@ ToolHelper_Web/
 │   │   ├── AppSidebar.vue             # 工具分组、搜索与导航
 │   │   ├── AppStatusBar.vue           # 全局状态提示
 │   │   ├── BasePanel.vue              # 公共内容面板
+│   │   ├── DatabaseTool.vue           # DBX 管理、数据库参数及本次密码选项
 │   │   ├── LogDrawer.vue              # 公共日志抽屉
 │   │   ├── RemoteTool.vue             # 真实远程外挂管理与连接表单
 │   │   └── ToolContent.vue            # 各工具的内容分支与交互逻辑
 │   ├── composables/useLogDrawer.js    # 日志与抽屉状态复用
-│   ├── composables/useRemotePlugin.js # 本机状态、互斥交互、任务接续与轮询
-│   ├── api/remotePlugin.js            # 受控 API 与内存 session
+│   ├── composables/useManagedPlugin.js # 两个插件共用状态、任务接续与轮询
+│   ├── composables/useRemotePlugin.js  # electerm 页面适配
+│   ├── composables/useDatabasePlugin.js # DBX 页面适配
+│   ├── composables/useDatabaseConnection.js # 连接字段与本次密码生命周期
+│   ├── api/pluginClient.js            # 共用受控 API 与内存 session
+│   ├── api/{remotePlugin,databasePlugin}.js # 固定插件 API 入口
 │   ├── config/tools.js                # 工具定义与分组
 │   ├── layouts/AppLayout.vue          # 工作台布局
 │   ├── router/index.js                # 根据工具配置生成路由
@@ -164,7 +177,8 @@ tools.js ──→ router/index.js ──→ ToolView.vue
 
 - `stores/app.js`：通过 `reactive` 定义共享状态，由入口注入；组件使用 `useAppStore()` 获取。当前只管理侧边栏开关与状态栏消息。
 - `ToolContent.vue`：通过 `ref` 管理表单、弹窗、SQL 条件及演示结果等页面状态。
-- `RemoteTool.vue` → `useRemotePlugin.js` → `api/remotePlugin.js`：远程插件独立接入 Java，其余工具分支保留原有原型。
+- `RemoteTool.vue` / `DatabaseTool.vue`：分别通过插件 composable 和 API 模块接入 Java；共用 `useManagedPlugin.js` 与 `api/pluginClient.js`，其余工具分支保留原型。
+- Java 的 `plugin/common` 复用官方传输、安装事务、进程基础操作与管理流程；`plugin/electerm`、`plugin/dbx` 分别限定包结构和连接参数。两个插件共用数据根锁和任务互斥，发行缓存与资产选择隔离，同域名限流冷却共享。
 - `useLogDrawer.js`：管理日志数组、展开状态、追加与清空操作；`LogDrawer.vue` 负责展示。
 - `utils/request.js`：处理 JSON、超时和业务错误，保留错误码及请求标识；副作用请求失败不会自动重放。
 - `assets/styles/main.css`：统一定义主题变量、布局、表单、面板、弹窗与响应式样式。
@@ -190,7 +204,7 @@ npm run build
 npm run preview
 ```
 
-仅预览界面时可使用 `npm run preview`。阶段 1 推荐将前端构建产物打入 Java JAR，在本机同源访问：
+仅预览界面时可使用 `npm run preview`。外挂功能推荐将前端构建产物打入 Java JAR，在本机同源访问：
 
 ```powershell
 npm run build
@@ -199,6 +213,8 @@ java -jar backend-java/target/toolhelper-local-service-0.1.0.jar
 ```
 
 随后访问 `http://127.0.0.1:18081`。Maven 在资源阶段复制已有 `dist/`；修改前端后必须重新构建前端并打包 Java。需要单独托管前端时，静态页面仍须通过本机服务及受控代理调用 API，不能把本机能力直接部署成公网服务。
+
+Windows 下重新打包前，先退出正在运行该目标 JAR 的 Java 实例，避免文件占用；不要结束其他 Java 进程。运行与构建需同时进行时，可从 JAR 副本启动隔离验收服务。
 
 路由使用 HTML5 History 模式，服务器需要在直接访问 `/tools/remote` 等前端路由时回退到 `index.html`。例如，在静态站点根目录指向 `dist/` 的 Nginx 站点中，可配置：
 

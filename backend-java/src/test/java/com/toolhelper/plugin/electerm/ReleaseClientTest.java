@@ -1,6 +1,7 @@
 package com.toolhelper.plugin.electerm;
 
 import com.toolhelper.config.ToolHelperProperties;
+import com.toolhelper.plugin.common.OfficialDownloadClient;
 import com.toolhelper.support.*;
 import java.io.*;
 import java.net.URI;
@@ -58,7 +59,7 @@ class ReleaseClientTest {
         for (String version : List.of("5.12.6-beta", "05.12.6", "v5.12", "")) assertThrows(ApiException.class, () -> ReleaseClient.version(version));
     }
     @Test void streamedDownloadChecksLengthHashAndProgress() throws Exception {
-        try (Client client = new Client()) {
+        try (DownloadClient client = new DownloadClient()) {
             client.bytes = "hello".getBytes(java.nio.charset.StandardCharsets.UTF_8);
             Asset asset = new Asset(1, "v5.12.6", 2, "file.zip", 5, SecurePaths.hash("hello"), "https://github.com/file");
             List<Long> progress = new ArrayList<>();
@@ -74,8 +75,11 @@ class ReleaseClientTest {
         }
     }
     private class Client extends ReleaseClient implements AutoCloseable {
-        byte[] bytes;
         Client() { super(ToolHelperProperties.forTests(root), json); }
-        @Override InputStream open(URI start, Duration timeout, boolean metadata) { return new ByteArrayInputStream(bytes); }
+    }
+    private class DownloadClient extends OfficialDownloadClient implements AutoCloseable {
+        byte[] bytes;
+        DownloadClient() { super(ToolHelperProperties.forTests(root)); }
+        @Override public InputStream open(URI start, Duration timeout, boolean metadata) { return new ByteArrayInputStream(bytes); }
     }
 }

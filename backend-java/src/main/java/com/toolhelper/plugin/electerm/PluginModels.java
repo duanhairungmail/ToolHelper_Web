@@ -15,7 +15,14 @@ public final class PluginModels {
     public record InstallManifest(String pluginId, long releaseId, String tag, long assetId,
                                   String assetName, String sha256, String executable,
                                   String userData, String layout, String revision,
-                                  Instant installedAt, List<String> packageFiles) {}
+                                  Instant installedAt, List<String> packageFiles, Map<String, String> packageHashes) {
+        public InstallManifest(String pluginId, long releaseId, String tag, long assetId,
+                String assetName, String sha256, String executable, String userData, String layout,
+                String revision, Instant installedAt, List<String> packageFiles) {
+            this(pluginId, releaseId, tag, assetId, assetName, sha256, executable, userData, layout,
+                    revision, installedAt, packageFiles, null);
+        }
+    }
     public record Inspection(String state, InstallManifest manifest, String message) {}
     public record ProcessObservation(String state, List<Long> pids, boolean foreignInstance) {}
     public record Journal(String operation, String taskId, String oldRevision,
@@ -24,14 +31,22 @@ public final class PluginModels {
     public record TaskRecord(String taskId, String operation, String keyHash, String fingerprint,
                              String status, String phase, long downloadedBytes, Long totalBytes,
                              String message, Instant createdAt, Instant updatedAt,
-                             Map<String, Object> result, ErrorInfo error) {
+                             Map<String, Object> result, ErrorInfo error, String pluginId) {
+        // 阶段1任务没有 pluginId；只能归属 electerm，不能被 DBX 认领。
+        public TaskRecord { pluginId = pluginId == null ? "electerm" : pluginId; }
+        public TaskRecord(String taskId, String operation, String keyHash, String fingerprint,
+                String status, String phase, long downloadedBytes, Long totalBytes, String message,
+                Instant createdAt, Instant updatedAt, Map<String, Object> result, ErrorInfo error) {
+            this(taskId, operation, keyHash, fingerprint, status, phase, downloadedBytes, totalBytes,
+                    message, createdAt, updatedAt, result, error, "electerm");
+        }
         public TaskRecord withProgress(String phase, long downloaded, Long total, String message) {
             return new TaskRecord(taskId, operation, keyHash, fingerprint, "RUNNING", phase,
-                    downloaded, total, message, createdAt, Instant.now(), result, null);
+                    downloaded, total, message, createdAt, Instant.now(), result, null, pluginId);
         }
         public TaskRecord finish(String status, String message, Map<String, Object> result, ErrorInfo error) {
             return new TaskRecord(taskId, operation, keyHash, fingerprint, status, phase,
-                    downloadedBytes, totalBytes, message, createdAt, Instant.now(), result, error);
+                    downloadedBytes, totalBytes, message, createdAt, Instant.now(), result, error, pluginId);
         }
     }
 }
