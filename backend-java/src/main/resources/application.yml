@@ -44,6 +44,14 @@ toolhelper:
     max-field-characters: 256
     max-file-bytes: 2097152
     max-request-bytes: 4194304
+  druid:
+    max-targets: 100
+    concurrency: 4
+    request-seconds: 5
+    target-seconds: 30
+    max-requests: 16
+    max-response-bytes: 1048576
+    max-request-bytes: 262144
 logging:
   file:
     name: ${TOOLHELPER_LOG_FILE:${toolhelper.data-root}/logs/service.log}

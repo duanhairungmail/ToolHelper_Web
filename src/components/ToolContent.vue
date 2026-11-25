@@ -6,6 +6,8 @@ import RemoteTool from './RemoteTool.vue'
 import DatabaseTool from './DatabaseTool.vue'
 import ApiValidationTool from './ApiValidationTool.vue'
 import DeviceMacTool from './DeviceMacTool.vue'
+import DruidScanTool from './DruidScanTool.vue'
+import KylinOpsTool from './KylinOpsTool.vue'
 import { useLogDrawer } from '@/composables/useLogDrawer'
 import { useAppStore } from '@/stores/app'
 
@@ -26,7 +28,7 @@ const aesOutput = ref('')
 const pingTarget = ref('')
 const pingTotal = ref(0)
 
-const hasLog = computed(() => ['remote', 'database', 'api', 'nodered', 'kylin'].includes(props.toolId))
+const hasLog = computed(() => ['remote', 'database', 'api', 'nodered'].includes(props.toolId))
 
 function runAction(message) {
   append(message)
@@ -64,6 +66,8 @@ function scanPing() {
     <DatabaseTool v-else-if="toolId === 'database'" />
     <ApiValidationTool v-else-if="toolId === 'api'" />
     <DeviceMacTool v-else-if="toolId === 'mac'" />
+    <DruidScanTool v-else-if="toolId === 'druid'" />
+    <KylinOpsTool v-else-if="toolId === 'kylin'" />
 
     <template v-else-if="toolId === 'serial'">
       <div class="equal-columns serial-grid"><div class="stack"><BasePanel title="连接设置"><div class="form-grid two"><label class="field"><span>串口号</span><select class="input"><option>COM3</option><option>COM5</option></select></label><label class="field"><span>波特率</span><select class="input"><option>9600</option><option>115200</option></select></label><label class="field"><span>数据位</span><select class="input"><option>8</option><option>7</option></select></label><label class="field"><span>校验位</span><select class="input"><option>无</option><option>偶校验</option></select></label></div><button class="btn btn-primary top-gap" @click="connected = !connected; store.setStatus(connected ? '串口连接已建立' : '串口已关闭', connected ? 'success' : 'idle')">{{ connected ? '关闭串口' : '打开串口' }}</button></BasePanel><BasePanel title="发送数据"><textarea v-model="serialText" class="input textarea" placeholder="输入十六进制数据"></textarea><button class="btn btn-primary top-gap" @click="sendSerial">发送</button></BasePanel></div><BasePanel title="接收日志"><template #actions><button class="btn btn-ghost" @click="serialLogs = []">清空日志</button></template><pre class="terminal-box fill">{{ serialLogs.length ? serialLogs.join('\n') : '等待串口数据' }}</pre></BasePanel></div>

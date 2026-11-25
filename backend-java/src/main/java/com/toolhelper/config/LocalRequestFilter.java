@@ -26,6 +26,8 @@ public class LocalRequestFilter extends OncePerRequestFilter {
     private final String token;
     @org.springframework.beans.factory.annotation.Value("${toolhelper.device-mac.max-request-bytes:4194304}")
     private int macRequestBytes = 4 * 1024 * 1024;
+    @org.springframework.beans.factory.annotation.Value("${toolhelper.druid.max-request-bytes:262144}")
+    private int druidRequestBytes = 256 * 1024;
 
     public LocalRequestFilter(ToolHelperProperties properties, JsonMapper json) {
         this.properties = properties;
@@ -75,7 +77,8 @@ public class LocalRequestFilter extends OncePerRequestFilter {
                 reject(response, id, 415, "JSON_REQUIRED", "操作请求必须使用 application/json"); return;
             }
             int limit = Set.of("/api/v1/device-mac/ledger/save", "/api/v1/device-mac/queries", "/api/v1/device-mac/export")
-                    .contains(request.getRequestURI()) ? macRequestBytes : 16 * 1024;
+                    .contains(request.getRequestURI()) ? macRequestBytes
+                    : request.getRequestURI().equals("/api/v1/druid/scans") ? druidRequestBytes : 16 * 1024;
             if (request.getContentLengthLong() > limit) {
                 reject(response, id, 413, "REQUEST_TOO_LARGE", "请求体超出限制"); return;
             }

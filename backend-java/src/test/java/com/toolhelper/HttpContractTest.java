@@ -84,6 +84,62 @@ class HttpContractTest {
                         .POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofByteArray());
                 assertEquals(200, macExport.statusCode()); assertEquals('P', macExport.body()[0]); assertEquals('K', macExport.body()[1]);
             }
+            // 阶段5真实HTTP契约：仅访问本机夹具，不探测用户设备。
+            String druid = base + "/api/v1/druid";
+            assertEquals(401, client.send(HttpRequest.newBuilder(URI.create(druid + "/capabilities")).GET().build(), HttpResponse.BodyHandlers.ofString()).statusCode());
+            var druidCaps = client.send(HttpRequest.newBuilder(URI.create(druid + "/capabilities")).header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals("DIRECT", json.readTree(druidCaps.body()).path("data").path("networkMode").asText());
+            var druidActive = client.send(HttpRequest.newBuilder(URI.create(druid + "/scans/active")).header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertTrue(json.readTree(druidActive.body()).path("data").isNull());
+            var druidInvalid = client.send(HttpRequest.newBuilder(URI.create(druid + "/scans")).header("X-ToolHelper-Session", token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"requestKey\":\"" + UUID.randomUUID() + "\",\"targets\":[],\"method\":\"POST\"}")).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(400, druidInvalid.statusCode());
+            target.handler = exchange -> TargetFixture.reply(exchange, 200, exchange.getRequestURI().getPath().endsWith("basic.json")
+                    ? "{\"ResultCode\":1,\"Content\":{\"Version\":\"1.2.27\",\"Drivers\":[]}}" : "<html><title>Druid Stat Index</title></html>");
+            var druidSubmit = client.send(HttpRequest.newBuilder(URI.create(druid + "/scans")).header("X-ToolHelper-Session", token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("requestKey", UUID.randomUUID().toString(), "targets", List.of(target.origin() + "/app/druid/"))))).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(202, druidSubmit.statusCode(), druidSubmit.body());
+            String druidId = json.readTree(druidSubmit.body()).path("data").path("taskId").asText();
+            for (int i = 0; i < 100; i++) {
+                var state = client.send(HttpRequest.newBuilder(URI.create(druid + "/scans/" + druidId)).header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());
+                if (json.readTree(state.body()).path("data").path("status").asText().equals("COMPLETED")) break;
+                if (i == 99) fail("Druid HTTP任务没有结束"); Thread.sleep(20);
+            }
+            var druidResults = client.send(HttpRequest.newBuilder(URI.create(druid + "/scans/" + druidId + "/results")).header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());
+            String druidTargetId = json.readTree(druidResults.body()).path("data").path("items").get(0).path("targetId").asText();
+            assertEquals("DATA_EXPOSED", json.readTree(druidResults.body()).path("data").path("items").get(0).path("retest").path("status").asText());
+            var druidDetail = client.send(HttpRequest.newBuilder(URI.create(druid + "/scans/" + druidId + "/results/" + druidTargetId))
+                    .header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, druidDetail.statusCode());
+            assertEquals("DATA_EXPOSED", json.readTree(druidDetail.body()).path("data").path("retest").path("status").asText());
+            assertEquals("PAGE_EXPOSED", json.readTree(druidDetail.body()).path("data").path("evidence").get(0).path("retest").path("status").asText());
+            for (String format : List.of("xlsx", "docx")) {
+                var exported = client.send(HttpRequest.newBuilder(URI.create(druid + "/export")).header("X-ToolHelper-Session", token).header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("taskId", druidId, "targetIds", List.of(druidTargetId), "columns", List.of("index", "target", "severity"), "format", format, "details", true)))).build(), HttpResponse.BodyHandlers.ofByteArray());
+                assertEquals(200, exported.statusCode()); assertEquals('P', exported.body()[0]);
+            }
+            var druidClear = client.send(HttpRequest.newBuilder(URI.create(druid + "/results")).header("X-ToolHelper-Session", token).DELETE().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, druidClear.statusCode());
+            // 阶段6契约只检查本机接口，不连接真实SSH主机。
+            String kylin = base + "/api/v1/kylin";
+            assertEquals(401, client.send(HttpRequest.newBuilder(URI.create(kylin + "/capabilities")).GET().build(), HttpResponse.BodyHandlers.ofString()).statusCode());
+            var kylinCaps = client.send(HttpRequest.newBuilder(URI.create(kylin + "/capabilities")).header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, kylinCaps.statusCode());
+            assertEquals(7, json.readTree(kylinCaps.body()).path("data").path("features").size());
+            assertEquals(4, json.readTree(kylinCaps.body()).path("data").path("assets").size());
+            assertEquals("1.0.0.33-0k1.11", json.readTree(kylinCaps.body()).path("data").path("patch").path("version").asText());
+            assertEquals("REPAIR", json.readTree(kylinCaps.body()).path("data").path("features").get(5).path("actions").get(0).asText());
+            for (String path : List.of("/connections/current", "/tasks/active")) {
+                var idle = client.send(HttpRequest.newBuilder(URI.create(kylin + path)).header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());
+                assertTrue(json.readTree(idle.body()).path("data").isNull());
+            }
+            var invalidPlan = client.send(HttpRequest.newBuilder(URI.create(kylin + "/plans")).header("X-ToolHelper-Session", token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"connectionId\":\"none\",\"feature\":\"logs\",\"action\":\"DEPLOY\",\"command\":\"reboot\"}")).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(400, invalidPlan.statusCode());
+            var unconfirmed = client.send(HttpRequest.newBuilder(URI.create(kylin + "/executions")).header("X-ToolHelper-Session", token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"planId\":\"none\",\"confirmed\":false}")).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(400, unconfirmed.statusCode());
+            assertEquals("KYLIN_CONFIRMATION_REQUIRED", json.readTree(unconfirmed.body()).path("error").path("code").asText());
             // 阶段3也必须经过真实HTTP、本机会话和现有JSON严格反序列化。
             String validation = base + "/api/v1/api-validation";
             assertEquals(401, client.send(HttpRequest.newBuilder(URI.create(validation + "/session")).GET().build(), HttpResponse.BodyHandlers.ofString()).statusCode());

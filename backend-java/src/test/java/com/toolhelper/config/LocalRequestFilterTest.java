@@ -71,4 +71,13 @@ class LocalRequestFilterTest {
         }
         var unrelated = request("POST", "/api/v1/device-mac/unknown"); unrelated.setContent(new byte[20000]); reject(unrelated, 413);
     }
+    @Test void druidScanHasDedicatedLimitButCredentialsAndOtherRoutesDoNot() throws Exception {
+        var scan = request("POST", "/api/v1/druid/scans"); scan.setContent(new byte[20000]);
+        filter.doFilter(scan, new MockHttpServletResponse(), (a, b) -> assertEquals(20000, ((HttpServletRequest) a).getInputStream().readAllBytes().length));
+        var large = configure(new MockHttpServletRequest("POST", "/api/v1/druid/scans") { @Override public long getContentLengthLong() { return -1; } });
+        large.setContent(new byte[262145]); reject(large, 413);
+        for (String path : java.util.List.of("/api/v1/druid/credential-checks", "/api/v1/druid/export", "/api/v1/druid/unknown")) {
+            var body = request("POST", path); body.setContent(new byte[20000]); reject(body, 413);
+        }
+    }
 }

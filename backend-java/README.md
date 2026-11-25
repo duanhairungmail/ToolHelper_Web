@@ -1,6 +1,6 @@
-# Java 本机服务：阶段 1 / 阶段 2 / 阶段 3 / 阶段 4 实现与验收说明
+# Java 本机服务：阶段 1～6 实现与验收说明
 
-更新日期：2026-11-25。electerm、DBX、极早期接口验证和设备 MAC 台账已接入同一个 Java 本机服务。第 1～6 节保留阶段 1 历史说明，第 7 节说明阶段 2，第 8 节说明阶段 3，第 9 节说明阶段 4。不同阶段的历史验收结果不互相替代。
+更新日期：2026-11-25。electerm、DBX、极早期接口验证、设备 MAC 台账、Druid 检测和KylinOS运维策略已接入同一个 Java 本机服务。第 1～6 节保留阶段 1 历史说明，第 7～11 节分别说明阶段 2～6。不同阶段的历史验收结果不互相替代。
 
 ## 1. 已实现范围
 
@@ -429,3 +429,147 @@ columns 允许 index（必选）、stationName、ipAddress、deviceName、device
 授权目标 `192.168.31.1 → 04:67:61:C6:82:F4` 与 `192.168.31.126 → F4:6A:DD:69:D5:77` 均匹配用户对照；本轮分别观察到Reachable和Probe（缓存映射）。导出可被openpyxl/python-docx读取，XML完整，MAC和长序列号保真。
 
 用户授权后，浏览器已检查两条已保存台账、历史观察与邻居状态、草稿编辑后的未保存标记/保存按钮、横向表格操作区及导出弹窗的Word/Excel和列选择。恢复草稿时浏览器控制超时，未完成重新加载交互验收，测试编辑未保存。Office实际排版、禁ICMP设备、真实跨网段/VPN变化、普通用户权限及1000目标真实并发网络场景未完成真实验收。夹具测试与1000行保存不等于这些网络场景已通过。不修改用户原有服务/网络设置，不新增依赖。
+
+## 10. 阶段5：Druid 监控暴露与访问控制检测
+
+### 分层与检测范围
+
+`DruidScanTool.vue` → `useDruidScan` / `druidScan.js` → `DruidScanController` / `DruidScanService` → `druid` 包中的目标策略、受限 HTTP 客户端、规则、证据判定、执行器和导出。模块独立管理内存任务，不改变外挂生命周期、阶段3登录或MAC台账；导出复用现有 `TableExport`，原模块调用无附录时保留原布局。未新增第三方依赖。
+
+规则版本固定为 `toolhelper-1/druid-1.2.27`，依据Alibaba Druid 1.2.27源码维护，随应用升级，不提供在线更新或脚本执行。对象是数据库连接池的StatViewServlet监控，不是Apache Druid，也不是完整CVE扫描器。
+
+固定13项GET：`index.html`、`basic.json`、`datasource.json`、`sql.json`、`websession.json`、`weburi.json`、`webapp.json`、`spring.json`及五个对应HTML（sql/websession/weburi/webapp/spring）。分页JSON只取 `page=1&perPageCount=10` 样本，不遍历全部统计、明细或重置接口。
+
+### 目标与网络
+
+- 输入完整HTTP/HTTPS URL，允许IPv4/ASCII DNS、应用上下文和自定义监控根；输入主机根时使用 `/druid/`，输入 `index.html` 时移除文件名。规范化后去重，保留监控路径，不猜其他目录；拒绝IPv6字面量、URL凭据、查询串、片段、控制字符、编码路径和路径穿越。
+- 默认直连，独立于插件下载的系统代理；不关闭TLS校验。禁止自动跳转，只手动跟随同源监控根、首页或固定登录页，最多3跳，不跨源、不越界、不从HTTPS降级HTTP。
+- 解析前检查地址，拒绝未指定、多播、链路本地及已知metadata地址；允许用户明确填写的本机/内网目标。JDK HttpClient未固定DNS解析到连接地址，不能宣称完全防御DNS重绑定；本机服务仍只允许受控loopback请求，禁止向网络暴露。
+- HTTP状态与业务内容分开：只识别已核实的完整业务拦截签名（HTTP402、`code=402`、`success=false`、指定登录提示）。结果为 `BUSINESS_AUTH_REQUIRED`，表示本来源未取得匿名数据、Druid自身鉴权未验证；普通402为HTTP异常。不会自动登录业务系统、复用阶段3Token或将业务登录态当作匿名结果。
+
+### 证据与指定凭据
+
+HTML仅证明页面指纹。JSON要求 `ResultCode=1`、合法Content结构和规则字段签名；空样本需要先识别组件指纹，不因空记录而视为受保护。不同JSON规则返回相同非空正文时降为通用响应、无法判断。原始SQL、Session、数据库连接串、Cookie及密码均不进入结果或报告，只保留固定字段名、类别、样本条数和说明。风险是本项目规则等级，不等于CVSS；未知、路径未发现及未完成均不能宣称安全。
+
+为复测业主表格中的历史未授权漏洞，目标摘要、详情和每条证据新增 `retest: {status, conclusion}`，由 `DruidRetest` 统一判定，页面与xlsx/docx复用同一结论。`DATA_EXPOSED`表示匿名监控接口暴露；`PAGE_EXPOSED`表示HTML监控页面匿名暴露，不能推断数据泄露；JSON路径返回HTML时仍为 `INCONCLUSIVE`。任一暴露优先报告；全部13项明确认证/来源/业务登录拦截才为 `BLOCKED`（本次未复现、当前来源匿名访问已拦截）；全部404为 `PATH_NOT_FOUND`；混合未知、未完成、失败为 `INCONCLUSIVE`。不会把部分拦截汇总成已修复，也不以指定凭据登录成功覆盖匿名基线。导出可选 `retest` 列（历史漏洞复测结论），附录逐端点始终附复测结论。
+
+凭据验证是独立单目标任务：先运行完整匿名基线，再对已识别且受保护的JSON规则尝试一组用户指定的Druid凭据。只适配Druid固定 `submitLogin` 表单（`loginUsername` / `loginPassword`），不使用字典、不重试、不替换匿名证据。登录 `success`、有效Cookie与受保护JSON复查都通过才标记VERIFIED；业务平台拦截不触发盲发账号。HTTP发送凭据必须传 `allowInsecureHttp:true`，页面每次确认。凭据只在运行闭包中短暂持有，结束清除引用，不进入公开任务、不持久化；这不等于保证JVM内存立即擦除。
+
+### 任务、配额与API
+
+`toolhelper.druid` 初值：max-targets=100、concurrency=4、request-seconds=5、target-seconds=30、max-requests=16、max-response-bytes=1048576、max-request-bytes=262144。启动校验范围，网页显示实际配额。深度64/单字符串64KiB限制在JSON解析前执行；每任务结果预算2MiB，最多保留20任务/结束后30分钟。结果与Cookie不落盘，服务重启清空，不恢复或重发。
+
+每进程只运行一个Druid任务，最多4个不同origin并发，同origin不同监控根串行。取消停止后续请求派发，并等待底层HTTP清理；无法立即中断的DNS/IO仍占用槽位，超时不保证操作系统底层立刻退出。任务COMPLETED表示目标已处理，不代表每个目标全部规则成功；逐目标有执行状态、完成规则数和失败详情。requestKey为UUID，仅当前进程保留期去重；凭据不保留密码副本供比较，重新验证必须使用新key。
+
+继续使用本机session、Host/Origin及严格JSON规则。统一前缀 `/api/v1/druid`；二进制外返回 `{requestId,data}` 或 `{requestId,error}`。
+
+| 方法 | 相对路径 | 请求与用途 |
+| --- | --- | --- |
+| GET | `/capabilities` | 配额、规则版本、固定目录、整改建议 |
+| POST | `/scans` | `{requestKey,targets}`，202返回任务；专用256KiB上限 |
+| POST | `/credential-checks` | `{requestKey,target,username,password,allowInsecureHttp}`，202；仍为16KiB上限 |
+| GET | `/scans`、`/scans/active` | 已保留任务与当前任务；不自动发起检测 |
+| GET / DELETE | `/scans/{id}` | 查询进度 / 取消 |
+| GET | `/scans/{id}/results?page=1&size=50` | 脱敏摘要，最多50条/页 |
+| GET | `/scans/{id}/results/{targetId}` | 已完成目标的固定端点证据 |
+| DELETE | `/results` | 清空本模块已结束结果；有活跃任务时拒绝，不重置目标 |
+| POST | `/export` | `{taskId,targetIds,columns,format,details}`，返回xlsx/docx；仍为16KiB上限 |
+
+导出按当前任务选择目标及列，序号必选，支持脱敏明细；XLSX为摘要/端点详情/整改说明工作表，所有单元格按文本写入、不产生公式；DOCX为原生摘要表格及详情、整改段落。浏览器下载，不接受服务端文件路径。GET会话失效可刷新后重试一次，POST/DELETE不自动重放。页面离开继续执行，返回时接续任务；仅URL草稿在应用内存保留，凭据离开即清空。
+
+### 2026-11-25 验证与限制
+
+- 前端39项通过、Vue构建成功。后端在业务402分类修正前全量111项无失败（109通过/2项可选外挂实包跳过）。修正后最新全量112项为109通过/1错误/2跳过：原有electerm恢复测试的Windows原子目录移动发生 `AccessDeniedException`；定向重测时原失败用例通过、同类另一移动用例报相同异常，根因尚未确定。未改动插件安装或恢复模块，不把最新全量记作通过。
+- 阶段5覆盖页面外壳、通用JSON、空记录、字段脱敏、深度/响应限制、13规则只读、Cookie隔离、指定凭据、业务402与普通402区分、首页受限但JSON公开、限流/超时/TLS、同源串行、4并发和取消；HTTP契约及原模块导出保留回归。
+- 最终阶段5/请求过滤/HTTP契约/MAC/原表格导出的31项定向测试全部通过。随后使用 `mvn -f backend-java/pom.xml -DskipTests package` 生成可执行JAR用于隔离验收；打包成功不代表前述全量异常已解决。日志保存在项目 `.runtime/phase5-final-targeted.log`、`phase5-package.log`、`phase5-recovery-retest.log` 和 `phase5-package-final.log`。
+- 历史漏洞复测结论补充后，最新同范围32项定向回归通过；覆盖全部拦截/404/普通402、页面与数据暴露优先级、部分失败不得判修复、JSON返回HTML、空样本、凭据基线隔离、HTTP结果字段及两类导出的结论。前端39项、构建、显式-DskipTests打包通过，日志为 `.runtime/phase5-retest-{java,frontend,build,package}.log`；没有重跑或宣称原electerm全量问题解决。
+- 获授权的真实目标 `http://192.168.31.126:8088/druid/index.html` 的13个端点均返回HTTP402。已只读核对完整业务登录拦截签名；未发送任何目标凭据、未复用业务Token、未复现匿名数据暴露。Druid组件与自身鉴权未验证，不能称目标安全。
+- 使用更新后的本功能再次匿名复测该目标，13/13项HTTP402并匹配业务登录拦截，任务 `c7ef3116-d22f-49dc-8568-2b06bb57982a`；API、页面汇总和13条详情及xlsx/docx均为 `BLOCKED`，结论“本次未复现：全部检查端点的匿名访问已拦截”。报告ZIP/XML与openpyxl/python-docx读回通过，隔离18085服务验收后已退出。
+- 报告ZIP/XML及openpyxl/python-docx读回通过，摘要、13条脱敏详情和整改说明齐全。打包渲染器报 `LibreOffice soffice.exe was not found on PATH`，实际Office排版仍未视觉验收；未安装软件替代该验收。
+- 用户授权后，在18085隔离页面检查了13项业务拦截结果、端点详情、Word/Excel/所选目标及列选择；模式切换清空测试凭据，刷新接续同一任务。未在浏览器实际下载或清空结果，二进制导出和清空行为由HTTP/回环测试覆盖。验收服务结束后关闭，不替换用户18081服务。
+- 真实Druid独立登录、不同Druid版本/反向代理、真实HTTPS受保护目标、100目标长期并发与DNS重绑定风险仍需专门验收。回环夹具不等于这些真实场景通过。本轮无新增依赖、未改变系统网络、未提交或推送Git。
+
+## 11. 阶段6：KylinOS运维策略
+
+### 实现与依赖
+
+`KylinOpsTool.vue` → `useKylinOps` / `kylinOps.js` → `KylinOpsController` / `KylinOpsService` → `kylin`包。保持既有分层，独立管理SSH连接和策略任务，不复用插件生命周期或业务平台凭据。用户批准后新增Apache MINA SSHD `sshd-core`与`sshd-sftp` 2.20.1，使用现有Java21与默认NIO2传输，无额外Provider。
+
+七项策略及边界：
+
+| 策略 | 已接入能力 | 限制 |
+| --- | --- | --- |
+| 激活 | 退出码及明确输出判定，矛盾状态为UNKNOWN | 只读，不提供未经校准的密钥激活 |
+| 定时重启 | cron、固定root脚本、独立LightDM自动登录片段、清理服务、备份恢复 | 部署不立即重启；默认带自动登录，最多等待指定用户X11会话60秒后清理；真实启动时序待验收 |
+| 日志 | 固定归档与/tmp保留期，journal vacuum；当前数量/容量统计；部署与立即清理分开 | 不截断活跃日志；立即清理只安装脚本并执行、不写cron；已删除内容不可恢复，数量仅预览快照 |
+| VNC | x86_64资产摘要、X11/LightDM预检、服务部署/启停/恢复，stdin之外单独生成DES兼容口令文件 | 默认loopback；LAN地址显式填写；8字符ASCII是传统格式限制，不代表强加密；没有aarch64版，原资产上游签名未取得 |
+| openGauss | 用户模板生成限制来源版本、固定目录/属主与6.0.1产品预检、备份替换、独立reload | 模板其他参数也整体替换；不自动restart；sha256需要已有用户具备相应口令摘要；真实配置语义/认证生效待验收 |
+| 组件漏洞 | 固定用户补丁的版本扫描、确认后SFTP上传/dpkg安装、安装后独立验证 | Kylin V10 amd64，健康且未hold的旧版本已安装组件；无独立CVE映射，不提供软件包回滚 |
+| 系统优化 | 14类状态扫描，逐项选择、停用mask或移除执行位、后置验证与原状态恢复 | 审计/更新/激活/存储/混合自启动只读，不杀进程，现有进程退出后才能验证执行位策略实际影响 |
+
+### 连接、计划和数据
+
+2026-11-25交互简化：七项功能直接切换，使用扫描/部署/卸载/验证等独立按钮。变更按钮自动请求计划并打开集中确认弹窗，内容/摘要默认折叠；最终确认仍由用户点击。sudo密码在成功扫描或生成计划后仅保留于前端组件闭包，绑定当前SSH连接；后续扫描与部署直接复用。15分钟未成功扫描或生成计划、断开/更换连接、sudo失败、刷新或离开页面后清除，提供手动清除按钮。取消计划不清除已验证的连接凭据；部署仍由用户确认。指定历史备份恢复移到高级折叠区。
+
+`UNINSTALL`沿用`POST /plans`和`POST /executions`，无需提供备份ID；恢复本工具首次变更前的状态。按主机、端口、指纹及功能聚合历史记录，为每个文件/服务保留首次状态与对应远程备份来源，按最新回执检查外部冲突。多次部署、不同操作范围都不会只恢复最近版本。明确未派发变更的失败记录保存`.unchanged`标记并跳过；缺少回执且没有该标记时拒绝自动卸载。该行为不恢复已删除日志或已发生的重启，系统优化对应恢复所有本功能已管理项。
+
+首次密钥探测拒绝进入认证，仅返回公开SHA256指纹。经可信渠道核对后显式保存host:port信任；认证严格固定该指纹，密钥变化拒绝连接。不读取本地私钥、不修改全局known_hosts。SSH密码认证后移除identity，不保存；sudo密码仅经stdin传入`sudo -k -S`。日志只记录目标、任务/计划ID、功能、状态和错误码，不保留远程原始stderr或秘密。
+
+2026-11-25状态读取故障修正：原实现将所有非零退出都转成`KYLIN_STATE_PROBE_FAILED`且丢弃stderr，历史日志无法确认该次失败的具体原因。现将有界stderr仅用于内存中的白名单分类；sudo诊断使用`LC_ALL=C`，缺少密码、认证失败、sudo授权不足、TTY限制分别返回`KYLIN_SUDO_PASSWORD_REQUIRED`、`KYLIN_SUDO_AUTH_FAILED`、`KYLIN_SUDO_FORBIDDEN`、`KYLIN_SUDO_TTY_REQUIRED`。状态读取工具缺失、动态库、systemd及访问权限错误也分别提示；无法识别时保留通用错误和退出码，日志不回显原始远程输出。sudo默认使用当前SSH用户的密码，前端明确标注用户名，输入框提交后清空，验证过的sudo凭据在当前连接内临时复用；不自动复用SSH密码或放宽远程授权。
+
+本轮使用项目中已有的主机信任记录固定指纹，在指定`192.168.31.126`测试机以`jzq`只读验证：sudo后UID为0；重启、日志、VNC、openGauss、系统优化的状态脚本退出0，并通过完整性与格式验证（状态项分别8/3/4/2/36）。正确凭据下未复现旧故障，不能从历史通用错误断言用户当时输入错误。本次未执行部署、卸载、清理、服务启停或重启；不修改目标sudo或动态库配置。后端更新需重启原服务使新错误分类生效，再从页面重新连接并扫描。
+
+本次增量验证：前端48项、Java定向回归47项（其中Kylin15项）通过，Vue构建及JAR打包成功。覆盖sudo输入为空、错误密码、sudo授权/TTY拒绝、远程stderr不回显、普通命令失败分类，以及前端预检失败后清空密码且不执行。记录位于`.runtime/phase6-probe-frontend.log`、`.runtime/phase6-probe-build.log`、`.runtime/phase6-probe-package.log`、`.runtime/phase6-probe-readonly.log`。SSH夹具关闭期间仍可见已记录的Windows NIO2线程池关闭告警，本轮未修复，不等同全量环境无异常。
+
+一个连接、一个写任务；空闲15分钟断开，页面后台轮询不续期；计划5分钟一次有效，任务摘要保留30分钟/最多20项。连接/认证各15秒，普通命令30秒；立即清理300秒。每个stdout/stderr各256KiB。SFTP逐块检查取消，单请求30秒，上传60秒加当前在途请求等待；不是瞬时强制取消。SSH连接底层读超时16分钟，命令期限独立。
+
+所有POST不自动重放，只有GET可恢复一次401。刷新只读取当前连接和任务，不发起新写操作。计划在提交时消耗，执行前及上传后核对状态；断线/超时区分FAILED、PARTIAL和UNKNOWN_REMOTE_STATE，取消不能承诺撤销已派发操作。
+
+本机`<toolhelper.data-root>/kylin/known-hosts/`保存信任，`operations/`保存原状态和变更后状态索引，不含密码。默认数据根仍在项目`.runtime/local-data`。远程备份固定`/var/lib/toolhelper/operations/<UUID>/`，root所属0700目录/0600文件；临时SFTP目录`/tmp/toolhelper-<UUID>/`为0700，只清理本任务固定文件。未取得变更后状态回执时不盲目生成恢复计划，外部修改冲突拒绝覆盖。恢复原文件内容、属主/权限、服务启用和运行状态，不固定恢复成enable；异常/瞬态服务状态会拒绝变更。
+
+### 用户提供补丁：扫描、修复与验证
+
+`KylinPatch`使用内置`kylin-offline-upgrade_1.0.0.33-0k1.11_amd64.deb`，178172字节，SHA256=`92fbdd5421a9a0783c123a30005f87f007feff0f3a5b45424ebcb32823e7fdc8`。来源为用户本轮指定目录，未新增下载源或第三方依赖；包内元数据与摘要均已核对。摘要证明本次分发字节与提供文件一致，不代替厂商签名验证，尚无独立厂商公告/CVE映射。
+
+扫描与验证均重新通过SSH读取状态，无需sudo，使用目标`dpkg --compare-versions`排序版本。查询错误不会当作未安装；验证要求目标为Kylin V10 amd64、组件完整配置且包审计正常、版本达到提供基线、`kylin-offline-upgrade.service`为loaded/active/enabled。`PATCH_REQUIRED`只表示低于提供的补丁版本，`PATCH_VERIFIED`只表示上述检查通过，不代表所有漏洞已修复。未安装、包异常、管理员hold、系统/架构不匹配以及版本已达到或更高时拒绝修复，避免全新安装或降级。
+
+点击“修复”生成`REPAIR`一次性计划，展示当前/目标版本、固定摘要、服务影响及限制；用户确认后才派发。执行前复查计划状态，经SFTP上传到随机0700暂存目录，再复制到root所属0700目录中的0600快照。对root副本核对SHA256及`dpkg-deb`实际Package/Version/Architecture，再运行`dpkg --no-act --install`。预检或状态复查失败不派发安装。通过后执行`DEBIAN_FRONTEND=noninteractive dpkg --force-confold --install`，命令期限300秒；保留现有conffile，不自动安装依赖、运行apt修复或重启系统。
+
+补丁维护脚本会更新桌面/MIME关联、启用并重启离线升级服务，可能中断正在执行的离线升级，须安排维护窗口。维护脚本也可能修改conffile之外的文件；退出0后仍重新检查包和服务。失败/断线/超时可能部分生效，不自动重试或宣称回滚；“验证”可在之后重新读取当前状态。
+
+本机`kylin/operations/<UUID>.patch-before.json`、`.patch-after.json`及失败时的`.patch-failed.json`记录目标/指纹、时间、补丁摘要和包/服务状态，不含密码；它们是安装记录，不进入普通文件备份恢复列表。软件包升级不提供一键卸载/降级。只清理本任务固定临时文件；安装命令超时、断线或取消且未返回时，保留root副本，避免删除仍被dpkg读取的文件。此时可在`/var/lib/toolhelper/operations/<安装记录ID>/patch.deb`人工核对，不应盲目重装。
+
+2026-11-25增量验证：Java定向回归54项（Kylin原15项、补丁7项及HTTP/过滤/MAC/Druid/导出32项）、前端53项通过，Vue生产构建与JAR打包成功。补丁测试通过内嵌SSH/SFTP实际上传固定字节，覆盖确认/重放、状态漂移、hold/新版本拒绝、预检失败不安装、安装部分失败不重试、安装后版本未变化/服务异常不能判成功；Bash夹具实际执行状态与校验脚本，检查摘要、包元数据及预检分支。日志为`.runtime/phase6-patch-{package,frontend,build}.log`。这些隔离测试不代表真实维护脚本安装已验收；Windows NIO2关闭告警仍保留。
+
+使用已有固定主机指纹，只读检查授权目标`192.168.31.126`：Kylin Desktop V10SP1/amd64，组件`install ok installed`、版本`1.0.0.33-0k1.9`、dpkg审计CLEAN，服务loaded/active/enabled；扫描返回PATCH_REQUIRED/PATCH_NOT_VERIFIED。已确认目标dpkg支持no-act、audit、confold，记录位于`.runtime/phase6-patch-readonly.log`。本轮未向真实目标上传、安装补丁或执行清理，真实修复仍由用户在页面确认后实施。
+
+18086隔离页面已检查扫描/修复/验证按钮、旧版本结果、验证重新读取时间、修复确认弹窗中的服务影响/版本/摘要以及取消返回。页面夹具没有SSH或安装能力；截图为`.runtime/phase6-patch-confirm.jpg`。验收临时标签与夹具服务已关闭，未替换用户18081后端服务。
+
+### HTTP接口
+
+均以`/api/v1/kylin`开头，沿用本机会话、Host/Origin、16KiB请求体及严格JSON字段校验。
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| GET | `/capabilities` | 七项策略、14类优化、资产摘要/状态和限制 |
+| POST | `/host-key-probes`、`/host-key-trust` | 无凭据探测、明确确认信任 |
+| POST | `/connections` | 认证建立连接 |
+| GET | `/connections/current` | 当前连接和系统信息 |
+| DELETE | `/connections/{id}` | 空闲时断开 |
+| GET | `/connections/{id}/backups` | 当前目标与密钥匹配的备份索引 |
+| POST | `/scans`、`/plans` | 固定策略只读检测、变更预览 |
+| POST | `/executions` | 一次性计划与confirmed确认，202创建任务 |
+| GET | `/tasks/active`、`/tasks/{id}` | 当前任务及结果 |
+| DELETE | `/tasks/{id}` | 请求停止后续步骤 |
+
+### 2026-11-25验证与待办
+
+- 交互简化增量验证：前端47项通过；Kylin13项及相关模块合计45项Java定向回归通过，生产构建/JAR打包通过。覆盖直接操作只准备预览、取消/失败不执行、同次sudo免二次输入、重复部署后首次状态恢复、跨范围备份来源与外部冲突。浏览器通过18086本地夹具检查定时重启直接按钮、部署/卸载确认及取消返回，夹具没有SSH能力；页面截图为`.runtime/phase6-simple-operations.jpg`。夹具及临时标签已关闭。本轮未操作真实目标。
+
+- 阶段6测试11项、HTTP/请求过滤/MAC/Druid/导出合计43项定向回归通过；前端44项、Vue生产构建和JAR打包通过，日志在`.runtime/phase6-*`。
+- 内嵌真实SSH/SFTP覆盖主机密钥错误前不发凭据、错误密码、sudo stdin、实际文件上传、退出7、输出上限、超时和派发前取消。执行夹具覆盖状态变化拒绝写、确认门槛、计划重放拒绝、应用失败PARTIAL、回执、恢复冲突和原执行位恢复。执行夹具不代表真实Linux策略命令已验收。
+- 已安装Git Bash对生成的重启/清理/状态/优化应用及恢复脚本执行`bash -n`，未运行这些脚本的远程副作用。真实`systemd-analyze verify`、LightDM生效时序、openGauss语义/认证与reload、VNC实际画面和日志删除均待真机验收。
+- Bash夹具实际执行只读状态脚本，覆盖systemd服务不存在且查询退出非零、其他查询失败中止；后台读取备份不续期SSH的断言通过。夹具不访问宿主机systemd或目标服务。
+- Windows NIO2在密钥拒绝/错误认证的连接关闭测试中仍偶发后台`IllegalStateException: Executor has been shut down`，等待关闭后仍有复现。测试断言、后续连接与进程退出正常；根因和长期连接稳定性尚未确认，不隐藏该诊断。
+- 初版历史页面验收：用户授权后在18086隔离页面检查七项功能、重启默认自动登录、日志保留期/独立立即清理、VNC默认回环、openGauss独立reload、当时的补丁基线限制及14项优化的只读禁用状态；未连接时变更按钮禁用，底部显示“KylinOS：SSH未连接”。初版仅覆盖未连接状态和表单交互，未在浏览器执行远程策略；后续补丁增量验收见上文。
+- 初版按用户要求未连接真机，后续已使用项目固定指纹进行上述只读检查，未执行目标写入、服务启停、日志清理或重启。原electerm全量Windows目录移动异常仍是前阶段待办，本轮没有宣称全量已解决。
