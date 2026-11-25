@@ -1,6 +1,6 @@
-# Java 本机服务：阶段 1 / 阶段 2 实现与验收说明
+# Java 本机服务：阶段 1 / 阶段 2 / 阶段 3 / 阶段 4 实现与验收说明
 
-更新日期：2026-11-23。阶段 1 electerm 与阶段 2 DBX 已接入同一个 Java 本机服务。DBX 已完成隔离 MySQL/PostgreSQL 真实连接验证；electerm 四协议真实服务验收仍待完成。第 1～6 节保留阶段 1 说明及历史验证记录，第 7 节说明阶段 2 与当前验证结果。
+更新日期：2026-11-25。electerm、DBX、极早期接口验证和设备 MAC 台账已接入同一个 Java 本机服务。第 1～6 节保留阶段 1 历史说明，第 7 节说明阶段 2，第 8 节说明阶段 3，第 9 节说明阶段 4。不同阶段的历史验收结果不互相替代。
 
 ## 1. 已实现范围
 
@@ -311,3 +311,121 @@ mvn -B -ntp -f backend-java/pom.xml `
 本轮未主动停止原有 `18081` 服务；收尾只读检查时该端口未监听，日常使用需启动新 Java 后端，再刷新前端。验收安装不在默认 `.runtime/local-data` 中；默认页面仍需下载一次 DBX。Windows 下构建前先退出正在运行目标 JAR 的对应 Java 实例，避免 Maven 替换文件失败，不要结束其他 Java 进程。
 
 最终新 JAR 检查中，数据库页面及生产资源、DBX 状态接口通过；版本查询返回 `GITHUB_RATE_LIMITED`，日志显示匿名额度 `60`、剩余 `0`，预计可重试时间为北京时间 `2026-11-23 22:45:43`。该时间不是配额恢复保证，之后仍以上游响应为准，本轮未继续重试。
+
+## 8. 阶段 3：极早期接口验证
+
+页面 `/tools/api` 已接入六项操作：开始验证、获取设备 ID、MQTT 主题、自动检测、清空结果（仅日志）、当前表格导出。另提供登录/退出、取消任务、状态刷新和 Cron 预览。MQTT 操作只从设备 HTTP API 读取主题字符串，不建立 broker 会话。
+
+### 分层与生命周期
+
+```text
+ApiValidationTool.vue → useApiValidation.js → apiValidation.js
+  → LocalRequestFilter → ApiValidationController → ApiValidationService
+    ├─ TargetAddressPolicy：显式origin校验与HTTP确认
+    ├─ LegacyApiCatalog：旧版16项固定接口、设备ID占位与POST限制
+    ├─ TargetApiClient：直连目标、登录、AES兼容、有界HTTP响应和分页解析
+    ├─ ValidationCron：现有Spring CronExpression的5/6字段子集
+    └─ ValidationExport：JDK ZIP/XML生成真正的xlsx/docx表格
+```
+
+未新增第三方依赖。目标连接、Token、结果、最多 20 个任务及最近 10 轮统计仅保留在进程内存；不使用外挂的磁盘 TaskCoordinator，也不保存密码用于续登。浏览器只持有本机 session 和 connectionId；目标 Token 不返回浏览器。密码发起即清空，失败不自动重放登录。
+
+同一进程同时只有一个 API 验证目标、一个执行批次；API 验证和外挂磁盘操作分开管理。所有目标变更、设备查询、批次和自动检测受同一验证服务互斥约束。旧窗口的 connectionId 不能操作新连接。页面离开后自动检测继续，重新进入可接续状态；Java 退出后全部清除。
+
+### 登录与目标网络
+
+登录体字段：`host`、整数 `port`、`scheme`（http/https）、`username`、`password`、`credentialMode`（PLAIN/AES_CBC）、`loginFormat`（JSON/LEGACY_QUERY）、`allowInsecureHttp`。主机只允许 IPv4/IPv6 或 ASCII DNS，不接收完整 URL、路径、shell、额外请求头等参数。默认 HTTPS、8088、AES_CBC、LEGACY_QUERY；HTTP 必须显式确认可信网络。
+
+JSON 格式向固定 `/sys/login` POST `{userName,password}`；旧格式将相同字段编码到 query，POST 空 body。不会在失败后自动切换或重试。AES 参数按旧源码兼容，仅为上游格式，不保护 HTTP 链路或访问日志中的 query。用户名最多 256 字符，密码最多 2048 字符；登录响应仅适配 `data.token`、根 `token`、字符串 `data`。
+
+Java 直连本次指定的目标，不使用外挂下载的系统代理；正常校验证书，不跟随 HTTP 重定向。后续固定请求同时发送 `Authorization: Bearer ...` 和 `token` Header。HTTP/业务码 401/403 表示需要重新登录；另兼容已实测目标的 `code=402`、`success=false`、`msg=请登录系统再操作！` 组合，普通 402 不当作登录失效。
+
+Token 失效停止自动检测、清除 Token，不保存密码后台续登。仍可导出同一连接已保留的结果；手动重新登录、切换目标或失败登录会清除旧结果。
+
+### 执行、分页和 Cron
+
+- 目录与顺序对照旧 `EarlyWarningApiView.cs`；默认 13 个 GET。三个复位/写入 POST 默认不选，手动确认后才允许发送旧版 `{}`；自动检测始终拒绝 POST。测试未调用真实副作用接口。
+- 只在选中项依赖设备 ID 时预取设备；无 ID 或预取失败则相关项 `SKIPPED`，不回退设备 1。登录失效则停止整个批次。
+- 结果区分 `BUSINESS_OK`、`HTTP_OK`（业务未确认）、`BUSINESS_ERROR`、`HTTP_ERROR`、`INVALID_RESPONSE`、`AUTH_REQUIRED`、`SKIPPED`、`TIMEOUT`、`NETWORK_ERROR`。收到 4xx/5xx 仍表示 HTTP 可达，不表示业务成功。只保存静态路径和通用错误摘要，不保留原始响应体。
+- 获取设备/MQTT 时按 `pageSize=100` 顺序读取，兼容数组和 `data.list/records/rows`，总数兼容根或 data 的 `totalCount/total/count`。有总数读至准确条数，无总数继续到空页。总数冲突/变化、重复页/ID、提前空页和配额超限均明确失败，保留上一份完整成功快照。
+- 默认每次整体 HTTP 超时 15 秒、响应体 2 MiB、最多 1000 页/100000 条。可通过 `toolhelper.api-validation.timeout-seconds/max-response-bytes/max-pages/max-rows` 配置。白名单字段每项最多 4096 字符、一次设备与主题总文本最多 8 Mi 个 UTF-16 字符；超过上限报错，不静默截断。重复页只保留 SHA-256 指纹。
+- Cron 使用现有 Spring 实现，只接受数字、`* ? , - /`，5 字段补秒 0，6 字段原样解析，7 字段含年份直接拒绝。时区为 Java 默认时区，页面显示时区及下次触发时间。不立即执行；上一轮未结束则跳过触发点，不并行、不堆积。最近 10 个正常完成批次按接口条目汇总通过率，接口错误会降低该轮通过率。
+- 取消/停止会中止本机等待与后续请求，已到达目标的请求不能撤回。POST/DELETE 的断线或无法解析响应显示结果不确定，前端先刷新核对，不自动重放。
+
+### HTTP 契约
+
+沿用现有 loopback、Host/Origin、本机 session、16 KiB 请求体和严格 JSON 校验。下面路径以 `/api/v1/api-validation` 为前缀，除二进制导出外返回 `{requestId,data}` 或 `{requestId,error}`。本功能不使用外挂安装的 Idempotency-Key 磁盘去重，不能宣称断线时已知执行结果。
+
+| 方法 | 相对路径 | 请求/用途 |
+| --- | --- | --- |
+| GET | `/session` | 登录状态、目标、表格、任务与调度；不含目标Token |
+| GET | `/endpoints` | 固定16项与sideEffect标识 |
+| POST | `/login` | 上述登录字段 |
+| POST | `/logout` | `{connectionId}` |
+| POST | `/verify` | `{connectionId,endpointIds,confirmedSideEffects}`，202返回任务 |
+| POST | `/device-ids`、`/mqtt-topics` | `{connectionId}`，202返回任务 |
+| GET / DELETE | `/tasks/{taskId}` | 查询/取消；DELETE需connectionId query |
+| POST | `/auto-detection` | `{connectionId,endpointIds,cron}` |
+| GET / DELETE | `/auto-detection` | 查询/停止；DELETE需connectionId query |
+| GET | `/cron-preview?cron=...` | 下一次执行时间与zone |
+| GET | `/export?connectionId=...&view=...&format=...` | view=results/devices/topics，format=xlsx/docx |
+
+清空结果按用户确认只清日志，不发送清表或取消请求。导出包含当前 Tab 全部记录，页面每页 50 条只是展示分页。XLSX 使用 inlineStr，保留长数字和 `= + - @` 开头字符串，不创建公式；DOCX 使用可编辑原生表格、重复表头和固定列宽。二者只包含白名单字段，不包含密码、Token、原始业务响应或请求头。导出由浏览器下载，不提供服务端任意文件路径接口。
+
+### 2026-11-24 验证记录
+
+- 前端 26 项通过；Java 87 项中 86 项通过、1 项 electerm 可选实包跳过，DBX 实包运行；Vue 构建和 Java 可执行 JAR 打包通过。新增测试使用真实回环 HttpServer，覆盖两种登录格式、AES固定向量、token shape、超时/大小、重定向、分页、错误分类、取消、互斥、10轮统计、Token失效停止、OOXML ZIP/XML和HTTP契约；未新增第三方依赖。
+- 隔离服务使用项目内 `.runtime/phase3-acceptance` 数据根和 18083 端口。经用户明确授权，在可信局域网 HTTP 8088 登录真实目标。JSON 登录返回 400；显式选择 AES_CBC + LEGACY_QUERY 登录成功，不自动降级。443拒绝连接、8088 TLS握手失败，因此本次不宣称HTTPS实测成功。
+- Java读取全量设备4条、主题4条，13个GET全部HTTP200；5项有已识别成功业务码、8项仅确认HTTP成功。六类xlsx/docx二进制导出成功。当前真实样本只有一页，多页完整性由回环服务测试覆盖。
+- 浏览器检查实际设备表格、13/16默认勾选、自动POST禁用、Cron时间预览、Excel实际下载，以及清空日志后表格保留。导出包可解压且XML解析通过；当前环境无打包文档渲染器，WPS窗口读取不稳定，**Office实际排版仍待视觉验收**。
+- 未调用真实复位/写入POST，未修改目标服务配置、系统代理、原有数据库或外挂窗口。真实Token自然到期、长期Cron、真实大数据多页和Office多页排版尚待验收；这些场景的夹具测试不等于真实目标验收。
+
+## 9. 阶段4：设备 MAC 查询与台账
+
+Vue `/tools/mac` → `useDeviceMac` / `deviceMac.js` → `DeviceMacController` / `DeviceMacService` → `WindowsMacResolver` / `DeviceMacStore` / `DeviceMacExport`。新增模块独立管理内存任务，不使用外挂 TaskCoordinator，不改变插件生命周期。`ValidationExport` 与 MAC 导出复用提取后的 `support/TableExport`，阶段3列宽和接口保持不变。
+
+### 查询与环境
+
+仅支持 Windows 本机 IPv4。`NetworkInterface` 处理本机地址；远端查询通过系统目录中的 Windows PowerShell（NoProfile、NonInteractive、Hidden）运行内置固定脚本，不更改执行策略。目标仅作为校验后的环境参数传入，不拼接用户脚本。路由和适配器通过 NetTCPIP 读取，当前实现接受已启用 Ethernet/WiFi 接口（InterfaceType 6/71）；经网关转发、隧道及不支持接口明确返回失败。
+
+探测前按实际网卡前缀拒绝子网广播，发出一次有界 Ping；无 ICMP 响应仍按精确 IP 和出站接口读取 Get-NetNeighbor。查询前后比较路由/源地址/前缀，变化返回 NETWORK_CHANGED。Reachable 显示已观察映射；Stale/Delay/Probe/Permanent 显示缓存映射；Incomplete/Unreachable/空映射不算成功。MAC 必须是有效六字节单播地址，统一大写冒号格式。代理 ARP、本机缓存和观察时间不构成设备身份或当前在线证明。
+
+进程同时有界读取 stdout/stderr（各64 KiB），UTF-8解析JSON，检查退出码和错误输出。超时或取消终止进程与已识别后代并等待清理，清理完成前不释放任务槽位。实际命令或 CIM 权限不足明确失败，不自动提升权限。capabilities 的 supported 表示平台和 PowerShell 文件可用，NetTCPIP/权限在实际执行时校验。
+
+### 台账与任务
+
+- 数据保存在 `LocalDataRoot/device-mac/records.json`；默认项目内 `.runtime/local-data/device-mac/records.json`，服从 toolhelper.data-root。schemaVersion=1，记录使用稳定 UUID，台账有 revision/savedAt，lastObservation 与行结果分离。
+- 页面草稿新增/编辑/删除/查询后须手动保存，保存携带 expectedRevision。版本冲突返回 LEDGER_VERSION_CONFLICT；文件损坏、未知版本、读取或写入失败不会显示为空台账再覆盖。复用 JsonFiles 原子替换和 SecurePaths；不安装驱动、不读写 Access、不自动迁移旧台账。
+- 台账允许保留待修订的空/非法 IP 文本，查询时逐行严格校验；批量空 IP 为 SKIPPED，非法 IP 为 INVALID_IPV4，同一 IP 合并查询。观察值绑定原 IP，页面不把旧值应用到新 IP；本轮失败可保留明确标注的历史观察。
+- 每个 Java 进程同时一个 MAC 批次，与接口验证、外挂任务分开。进度按台账行统计，COMPLETED 表示所有行处理完成，不代表全部成功。公共权限/命令故障使整批 FAILED；目标级无映射继续其他行。
+- 任务状态 QUEUED/RUNNING/CANCELLING/COMPLETED/CANCELLED/FAILED；取消幂等，等待运行中的查询清理。内存任务结束后保留30分钟，最多20个任务；重启不恢复、不重发。
+- requestKey 为 UUID，仅本进程保留期内去重：相同输入返回原任务，不同输入冲突。前端仅自动重试安全GET，不自动重放POST/DELETE。离开工具可继续执行，返回恢复任务；浏览器刷新会丢弃未保存草稿。
+
+### 配额与 API
+
+`toolhelper.device-mac` 配置：max-rows=1000、concurrency=4、timeout-seconds=10、max-field-characters=256、max-file-bytes=2097152、max-request-bytes=4194304。启动时校验范围。任务保留30分钟/20个为本阶段固定限制。
+
+继续使用现有 loopback、Host/Origin、本机会话、严格 JSON 校验。仅下表的三个 POST 路径允许专用请求体上限（同时检查 Content-Length 与实际流字节），其他接口仍为16 KiB。
+
+统一前缀 `/api/v1/device-mac`；二进制以外返回 `{requestId,data}` 或 `{requestId,error}`。
+
+| 方法 | 路径 | 内容 |
+| --- | --- | --- |
+| GET | /capabilities | 平台支持状态和配额，不发起网络探测 |
+| GET | /ledger | 持久化台账、版本与记录 |
+| POST | /ledger/save | `{expectedRevision,records}`，返回新台账；专用请求体上限 |
+| POST | /queries | `{requestKey,items:[{recordId,ipAddress}]}`，202返回任务；专用请求体上限 |
+| GET | /queries/active | 活跃任务或null |
+| GET | /queries/{taskId} | 进度和逐行结果 |
+| DELETE | /queries/{taskId} | 取消，返回当前/最终状态 |
+| POST | /export | `{format,columns,records}`，返回xlsx/docx；专用请求体上限 |
+
+columns 允许 index（必选）、stationName、ipAddress、deviceName、deviceModel、serialNumber、macAddress、location、status、checkedAt。records 是页面固定草稿快照，全部或所选行由页面选择。Excel使用文本单元格，Word为原生横向表格；数据通过校验并转义XML，客户端不传服务器文件路径。
+
+### 2026-11-25 验证与限制
+
+已完成前端32项、后端全量98项（96通过/2个可选外挂实包跳过，包含新增HTTP契约及进程后代清理测试），Vue生产构建和可执行JAR打包成功。隔离服务使用18084端口、`.runtime/phase4-acceptance`数据根，真实HTTP验收1000行保存、版本冲突、重复请求、取消和两种导出；隔离重启后台账版本与观察值恢复、内存任务清空。
+
+授权目标 `192.168.31.1 → 04:67:61:C6:82:F4` 与 `192.168.31.126 → F4:6A:DD:69:D5:77` 均匹配用户对照；本轮分别观察到Reachable和Probe（缓存映射）。导出可被openpyxl/python-docx读取，XML完整，MAC和长序列号保真。
+
+用户授权后，浏览器已检查两条已保存台账、历史观察与邻居状态、草稿编辑后的未保存标记/保存按钮、横向表格操作区及导出弹窗的Word/Excel和列选择。恢复草稿时浏览器控制超时，未完成重新加载交互验收，测试编辑未保存。Office实际排版、禁ICMP设备、真实跨网段/VPN变化、普通用户权限及1000目标真实并发网络场景未完成真实验收。夹具测试与1000行保存不等于这些网络场景已通过。不修改用户原有服务/网络设置，不新增依赖。

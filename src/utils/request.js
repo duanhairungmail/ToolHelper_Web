@@ -17,8 +17,8 @@ export async function request(url, options = {}) {
     const response = await fetch(url, { ...fetchOptions, signal: controller.signal })
     let payload
     try { payload = await response.json() } catch {
-      const mutation = fetchOptions.method === 'POST'
-      throw new RequestError(mutation ? '请求结果无法确认，请刷新插件状态核对后再操作，勿连续重试'
+      const mutation = !['GET', 'HEAD'].includes(fetchOptions.method || 'GET')
+      throw new RequestError(mutation ? '请求结果无法确认，请刷新状态核对后再操作，勿连续重试'
         : '本机服务未返回有效 JSON，请检查 Java 服务和开发代理', {
         status: response.status, code: mutation ? 'REQUEST_OUTCOME_UNKNOWN' : 'INVALID_RESPONSE', requestId: response.headers.get('X-Request-Id')
       })
@@ -32,10 +32,11 @@ export async function request(url, options = {}) {
     return payload
   } catch (error) {
     if (error instanceof RequestError) throw error
-    throw new RequestError(fetchOptions.method === 'POST'
-      ? '请求结果无法确认，请刷新插件状态核对后再操作，勿连续重试'
+    const mutation = !['GET', 'HEAD'].includes(fetchOptions.method || 'GET')
+    throw new RequestError(mutation
+      ? '请求结果无法确认，请刷新状态核对后再操作，勿连续重试'
       : '本机服务不可用，请检查 Java 服务是否已启动', {
-      code: fetchOptions.method === 'POST' ? 'REQUEST_OUTCOME_UNKNOWN' : 'SERVICE_UNAVAILABLE'
+      code: mutation ? 'REQUEST_OUTCOME_UNKNOWN' : 'SERVICE_UNAVAILABLE'
     })
   } finally {
     clearTimeout(timer)

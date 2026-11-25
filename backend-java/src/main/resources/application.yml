@@ -32,6 +32,18 @@ toolhelper:
   max-user-data-bytes: 2147483648
   task-retention-days: 7
   max-task-records: 1000
+  api-validation:
+    timeout-seconds: 15
+    max-response-bytes: 2097152
+    max-pages: 1000
+    max-rows: 100000
+  device-mac:
+    max-rows: 1000
+    concurrency: 4
+    timeout-seconds: 10
+    max-field-characters: 256
+    max-file-bytes: 2097152
+    max-request-bytes: 4194304
 logging:
   file:
     name: ${TOOLHELPER_LOG_FILE:${toolhelper.data-root}/logs/service.log}

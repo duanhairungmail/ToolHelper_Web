@@ -62,4 +62,13 @@ class LocalRequestFilterTest {
                 assertArrayEquals("{}".getBytes(StandardCharsets.UTF_8), ((HttpServletRequest) a).getInputStream().readAllBytes()));
         var wrongType = request("POST", "/api/v1/plugins/electerm/launch"); wrongType.setContentType("text/plain"); reject(wrongType, 415);
     }
+    @Test void onlyMacPayloadRoutesReceiveLargerLimitIncludingChunkedRequests() throws Exception {
+        for (String path : java.util.List.of("/api/v1/device-mac/ledger/save", "/api/v1/device-mac/queries", "/api/v1/device-mac/export")) {
+            var valid = request("POST", path); valid.setContent(new byte[20000]);
+            filter.doFilter(valid, new MockHttpServletResponse(), (a, b) -> assertEquals(20000, ((HttpServletRequest) a).getInputStream().readAllBytes().length));
+            var large = configure(new MockHttpServletRequest("POST", path) { @Override public long getContentLengthLong() { return -1; } });
+            large.setContent(new byte[4 * 1024 * 1024 + 1]); reject(large, 413);
+        }
+        var unrelated = request("POST", "/api/v1/device-mac/unknown"); unrelated.setContent(new byte[20000]); reject(unrelated, 413);
+    }
 }

@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 
 @RestControllerAdvice
 public class ApiErrors {
@@ -23,7 +24,7 @@ public class ApiErrors {
         return error(request, error.status(), error.code(), error.getMessage(), error.retryable());
     }
     @ExceptionHandler({HttpMessageNotReadableException.class, MissingRequestHeaderException.class,
-            MethodArgumentTypeMismatchException.class})
+            MethodArgumentTypeMismatchException.class, MissingServletRequestParameterException.class})
     public ResponseEntity<?> invalid(Exception failure, HttpServletRequest request) {
         return error(request, 400, "INVALID_REQUEST", "请求体、字段类型或必需请求头不正确", false);
     }

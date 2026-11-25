@@ -3,6 +3,7 @@ package com.toolhelper;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.core.FileAppender;
 import com.toolhelper.config.ToolHelperProperties;
+import com.toolhelper.validation.TargetFixture;
 import java.net.*;
 import java.net.http.*;
 import java.nio.file.*;
@@ -19,7 +20,8 @@ class HttpContractTest {
     @TempDir Path root;
     @Test void realHttpServerRequiresSessionRejectsUnknownFieldsAndNeverFallsBackForApi() throws Exception {
         var app = new SpringApplication(ToolHelperApplication.class);
-        try (var context = app.run("--server.port=0", "--toolhelper.data-root=" + root,
+        try (var target = new TargetFixture();
+             var context = app.run("--server.port=0", "--toolhelper.data-root=" + root,
                 "--spring.main.banner-mode=off");
              var client = HttpClient.newHttpClient()) {
             // 只覆盖数据目录时，日志也必须跟随同一目录，避免另行写入用户 C 盘。
@@ -48,6 +50,81 @@ class HttpContractTest {
             assertEquals("dbx", dbxData.path("pluginId").asText());
             assertEquals("NOT_INSTALLED", dbxData.path("state").asText());
             assertTrue(dbxData.path("directory").asText().endsWith("plugins" + java.io.File.separator + "dbx"));
+            // 阶段4 HTTP 契约不探测真实网络：台账、版本冲突、空IP任务和导出。
+            String mac = base + "/api/v1/device-mac";
+            assertEquals(401, client.send(HttpRequest.newBuilder(URI.create(mac + "/ledger")).GET().build(), HttpResponse.BodyHandlers.ofString()).statusCode());
+            var macActive = client.send(HttpRequest.newBuilder(URI.create(mac + "/queries/active")).header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, macActive.statusCode()); assertTrue(json.readTree(macActive.body()).path("data").isNull());
+            String macId = UUID.randomUUID().toString();
+            String macRows = "[{\"recordId\":\"" + macId + "\",\"stationName\":\"contract\",\"ipAddress\":\"\",\"deviceName\":\"\",\"deviceModel\":\"\",\"serialNumber\":\"90071992547409931234\",\"location\":\"\",\"lastObservation\":null}]";
+            String saveMac = "{\"expectedRevision\":\"initial\",\"records\":" + macRows + "}";
+            var macSaved = client.send(HttpRequest.newBuilder(URI.create(mac + "/ledger/save")).header("X-ToolHelper-Session", token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(saveMac)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, macSaved.statusCode(), macSaved.body());
+            assertEquals(1, json.readTree(macSaved.body()).path("data").path("records").size());
+            assertEquals(409, client.send(HttpRequest.newBuilder(URI.create(mac + "/ledger/save")).header("X-ToolHelper-Session", token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(saveMac)).build(), HttpResponse.BodyHandlers.ofString()).statusCode());
+            var invalidMac = client.send(HttpRequest.newBuilder(URI.create(mac + "/queries")).header("X-ToolHelper-Session", token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"requestKey\":\"" + UUID.randomUUID() + "\",\"items\":[],\"script\":\"bad\"}")).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(400, invalidMac.statusCode()); assertEquals("INVALID_REQUEST", json.readTree(invalidMac.body()).path("error").path("code").asText());
+            var macQuery = client.send(HttpRequest.newBuilder(URI.create(mac + "/queries")).header("X-ToolHelper-Session", token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"requestKey\":\"" + UUID.randomUUID() + "\",\"items\":[{\"recordId\":\"" + macId + "\",\"ipAddress\":\"\"}]}")).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(202, macQuery.statusCode());
+            String macTaskId = json.readTree(macQuery.body()).path("data").path("taskId").asText();
+            for (int i = 0; i < 100; i++) {
+                var macTask = client.send(HttpRequest.newBuilder(URI.create(mac + "/queries/" + macTaskId)).header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());
+                var data = json.readTree(macTask.body()).path("data");
+                if (data.path("status").asText().equals("COMPLETED")) { assertEquals("SKIPPED", data.path("results").get(0).path("status").asText()); break; }
+                if (i == 99) fail("MAC空IP任务未结束");
+                Thread.sleep(10);
+            }
+            for (String format : List.of("xlsx", "docx")) {
+                String body = "{\"format\":\"" + format + "\",\"columns\":[\"index\",\"serialNumber\"],\"records\":" + macRows + "}";
+                var macExport = client.send(HttpRequest.newBuilder(URI.create(mac + "/export")).header("X-ToolHelper-Session", token).header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofByteArray());
+                assertEquals(200, macExport.statusCode()); assertEquals('P', macExport.body()[0]); assertEquals('K', macExport.body()[1]);
+            }
+            // 阶段3也必须经过真实HTTP、本机会话和现有JSON严格反序列化。
+            String validation = base + "/api/v1/api-validation";
+            assertEquals(401, client.send(HttpRequest.newBuilder(URI.create(validation + "/session")).GET().build(), HttpResponse.BodyHandlers.ofString()).statusCode());
+            var catalog = client.send(HttpRequest.newBuilder(URI.create(validation + "/endpoints")).header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(16, json.readTree(catalog.body()).path("data").size());
+            for (String body : List.of("{\"host\":\"localhost\",\"port\":8088.5}", "{\"host\":\"localhost\",\"arbitraryUrl\":\"http://bad\"}")) {
+                var invalid = client.send(HttpRequest.newBuilder(URI.create(validation + "/login")).header("X-ToolHelper-Session", token)
+                        .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
+                assertEquals(400, invalid.statusCode());
+            }
+            target.handler = exchange -> {
+                if (!TargetFixture.loginReply(exchange)) TargetFixture.reply(exchange, 200, "{\"code\":0,\"totalCount\":1,\"data\":[{\"id\":\"9007199254740993\",\"deviceName\":\"fixture-device\",\"password\":\"raw-sensitive-response\"}]}");
+            };
+            var login = client.send(HttpRequest.newBuilder(URI.create(validation + "/login")).header("X-ToolHelper-Session", token)
+                    .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(target.login()))).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, login.statusCode(), login.body());
+            var loginData = json.readTree(login.body()).path("data");
+            String connection = loginData.path("connectionId").asText();
+            assertTrue(loginData.path("connected").asBoolean()); assertFalse(login.body().contains("fixture-token"));
+            var submitted = client.send(HttpRequest.newBuilder(URI.create(validation + "/device-ids")).header("X-ToolHelper-Session", token)
+                    .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString("{\"connectionId\":\"" + connection + "\"}")).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(202, submitted.statusCode());
+            String taskId = json.readTree(submitted.body()).path("data").path("taskId").asText();
+            String terminal = "";
+            for (int attempt = 0; attempt < 100; attempt++) {
+                var task = client.send(HttpRequest.newBuilder(URI.create(validation + "/tasks/" + taskId)).header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());
+                terminal = json.readTree(task.body()).path("data").path("status").asText();
+                if (Set.of("SUCCEEDED", "FAILED", "CANCELLED").contains(terminal)) break;
+                Thread.sleep(20);
+            }
+            assertEquals("SUCCEEDED", terminal);
+            for (String format : List.of("xlsx", "docx")) {
+                var exported = client.send(HttpRequest.newBuilder(URI.create(validation + "/export?connectionId=" + connection + "&view=devices&format=" + format))
+                        .header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofByteArray());
+                assertEquals(200, exported.statusCode()); assertTrue(exported.headers().firstValue("Content-Disposition").orElse("").endsWith("." + format));
+                assertEquals('P', exported.body()[0]); assertEquals('K', exported.body()[1]);
+            }
+            var stopped = client.send(HttpRequest.newBuilder(URI.create(validation + "/auto-detection?connectionId=" + connection)).header("X-ToolHelper-Session", token).DELETE().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, stopped.statusCode(), stopped.body());
+            String log = Files.readString(logFile);
+            for (String secret : List.of("fixture-password", "fixture-token", "raw-sensitive-response")) assertFalse(log.contains(secret), "日志泄漏测试字段");
             for (String body : List.of(
                     "{\"type\":\"MYSQL\",\"host\":\"localhost\",\"port\":3306,\"username\":\"u\",\"args\":[\"--help\"]}",
                     "{\"type\":\"POSTGRESQL\",\"host\":\"localhost\",\"port\":5432.5,\"username\":\"u\"}",

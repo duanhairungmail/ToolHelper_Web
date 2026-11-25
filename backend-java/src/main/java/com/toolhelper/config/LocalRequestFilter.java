@@ -24,6 +24,8 @@ public class LocalRequestFilter extends OncePerRequestFilter {
     private final ToolHelperProperties properties;
     private final JsonMapper json;
     private final String token;
+    @org.springframework.beans.factory.annotation.Value("${toolhelper.device-mac.max-request-bytes:4194304}")
+    private int macRequestBytes = 4 * 1024 * 1024;
 
     public LocalRequestFilter(ToolHelperProperties properties, JsonMapper json) {
         this.properties = properties;
@@ -72,12 +74,14 @@ public class LocalRequestFilter extends OncePerRequestFilter {
             if (contentType == null || !contentType.split(";", 2)[0].trim().equalsIgnoreCase("application/json")) {
                 reject(response, id, 415, "JSON_REQUIRED", "操作请求必须使用 application/json"); return;
             }
-            if (request.getContentLengthLong() > 16 * 1024) {
+            int limit = Set.of("/api/v1/device-mac/ledger/save", "/api/v1/device-mac/queries", "/api/v1/device-mac/export")
+                    .contains(request.getRequestURI()) ? macRequestBytes : 16 * 1024;
+            if (request.getContentLengthLong() > limit) {
                 reject(response, id, 413, "REQUEST_TOO_LARGE", "请求体超出限制"); return;
             }
             // 同时限制 chunked/无 Content-Length 请求的实际字节数。
-            byte[] body = request.getInputStream().readNBytes(16 * 1024 + 1);
-            if (body.length > 16 * 1024) {
+            byte[] body = request.getInputStream().readNBytes(limit + 1);
+            if (body.length > limit) {
                 reject(response, id, 413, "REQUEST_TOO_LARGE", "请求体超出限制"); return;
             }
             chain.doFilter(buffered(request, body), response);
