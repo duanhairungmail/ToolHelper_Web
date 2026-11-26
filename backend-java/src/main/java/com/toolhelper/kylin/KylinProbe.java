@@ -3,8 +3,11 @@ package com.toolhelper.kylin;
 import com.toolhelper.support.ApiException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.*;
 import java.util.function.BooleanSupplier;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import static com.toolhelper.kylin.KylinModels.*;
@@ -13,6 +16,8 @@ import static com.toolhelper.kylin.KylinSshClient.quote;
 /** 固定key=value协议，状态与命令退出码分开，不能用active子串判断inactive。 */
 public final class KylinProbe {
     private static final Logger LOG = LoggerFactory.getLogger(KylinProbe.class);
+    private static final Pattern TRIAL_EXPIRATION = Pattern.compile("^(?:试用(?:期)?到期时间|Expiration date of trial)\\s*[:：]\\s*([0-9]{4}-[0-9]{2}-[0-9]{2})\\s*$");
+    private static final Pattern SERVICE_EXPIRATION = Pattern.compile("^(?:技术服务到期时间|Expiration date of technical service)\\s*[:：]\\s*([0-9]{4}-[0-9]{2}-[0-9]{2})\\s*$");
     private KylinProbe() {}
     public static final String SYSTEM = """
             set -eu
@@ -111,14 +116,33 @@ public final class KylinProbe {
     private static String safeDetail(String value) {
         return value.length() <= 256 && value.codePoints().noneMatch(Character::isISOControl) ? value : "输出格式超出预期";
     }
+    private static String activationDetail(String status, List<String> lines) {
+        if (status.equals("UNKNOWN")) return "未获取明确激活状态";
+        boolean activated = status.equals("ACTIVATED");
+        String label = activated ? "技术服务到期时间" : "试用期到期时间";
+        Pattern pattern = activated ? SERVICE_EXPIRATION : TRIAL_EXPIRATION;
+        Set<String> dates = new LinkedHashSet<>();
+        // 只提取对应状态的明确日期字段，不把另一种到期日期混用，也不回显原始输出。
+        for (String line : lines) {
+            var match = pattern.matcher(line);
+            if (match.matches()) dates.add(match.group(1));
+        }
+        if (dates.size() != 1) return label + "：未获取";
+        try { return label + "：" + LocalDate.parse(dates.iterator().next()); }
+        catch (DateTimeParseException invalid) { return label + "：未获取"; }
+    }
     public static Scan scan(KylinSshClient ssh, String feature, boolean sudo, String password) {
         List<Finding> findings = new ArrayList<>(); Map<String, String> state;
         if (feature.equals("activation")) {
             var reply = ssh.run("kylin_activation_check", sudo, password, 30, () -> false);
-            String out = reply.output(); boolean no = out.contains("系统未被激活") || out.contains("系统未激活");
-            boolean yes = out.lines().map(String::trim).anyMatch(s -> s.equals("系统激活") || s.contains("系统已激活"));
+            // sudo诊断使用LC_ALL=C，激活命令会继承英文环境；同时兼容中文终端的明确状态。
+            // 英文按完整行匹配，避免把not activated中的activated误判为已激活；日期不参与判断。
+            var lines = reply.output().lines().map(String::trim).toList();
+            boolean no = lines.stream().anyMatch(s -> s.contains("系统未被激活") || s.contains("系统未激活") || s.equals("System is not activated."));
+            boolean yes = lines.stream().anyMatch(s -> s.equals("系统激活") || s.contains("系统已激活") || s.equals("System is activated."));
             String status = reply.exitCode() == 0 && no != yes ? no ? "NOT_ACTIVATED" : "ACTIVATED" : "UNKNOWN";
-            findings.add(new Finding("activation", status, "根据激活命令退出码及明确状态判断；不根据服务状态推断授权，不保存原始输出"));
+            if (status.equals("UNKNOWN")) LOG.warn("Kylin激活状态无法判断 exitCode={} activatedMarker={} notActivatedMarker={}", reply.exitCode(), yes, no);
+            findings.add(new Finding("activation", status, activationDetail(status, lines)));
             state = Map.of("activation", status);
         } else if (feature.equals("patch")) {
             return KylinPatch.scan(ssh);

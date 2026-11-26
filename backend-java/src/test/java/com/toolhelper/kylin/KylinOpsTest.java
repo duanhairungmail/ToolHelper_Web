@@ -31,6 +31,7 @@ class KylinOpsTest {
         final AtomicInteger authentications = new AtomicInteger();
         final List<String> commands = new CopyOnWriteArrayList<>();
         volatile String activation = "系统未激活";
+        volatile int activationExitCode;
         volatile String fileState = "MISSING";
         volatile boolean failApply;
         volatile String restoreState;
@@ -84,7 +85,10 @@ class KylinOpsTest {
                             fileState = attrs[0] + "|644|" + attrs[2] + "|" + attrs[3];
                         }
                         else if (command.contains("install -o") && restoreState != null) fileState = restoreState;
-                        else if (command.contains("kylin_activation_check")) getOutputStream().write(activation.getBytes(StandardCharsets.UTF_8));
+                        else if (command.contains("kylin_activation_check")) {
+                            getOutputStream().write(activation.getBytes(StandardCharsets.UTF_8));
+                            getOutputStream().flush(); onExit(activationExitCode); return;
+                        }
                         else if (command.contains("exit-seven")) { onExit(7); return; }
                         else getOutputStream().write("fixture-ok".getBytes(StandardCharsets.UTF_8));
                         onExit(0);
@@ -177,6 +181,77 @@ class KylinOpsTest {
             assertTrue(store.trust(new TrustRequest(host.host(), host.port(), key.fingerprint(), true)).trusted());
             assertEquals(key.fingerprint(), store.trusted(host));
             var loaded = new KylinHostKeyStore(root.resolve("data"), json); assertEquals(key.fingerprint(), loaded.trusted(host));
+        }
+    }
+    @Test void activationRecognizesChineseScreenshotsAndEnglishSudoOutput() throws Exception {
+        try (var fixture = new Fixture(root.resolve("ssh"))) {
+            var key = KylinSshClient.probe(fixture.host());
+            try (var ssh = KylinSshClient.connect(fixture.host(), "fixture", "fixture-password", key.fingerprint())) {
+                // 中文来自用户两张截图；英文两种状态文本已在目标命令文件中核对。
+                var cases = List.of(
+                        Map.entry("试用到期时间： 2026-07-29\n系统未被激活\n", "NOT_ACTIVATED"),
+                        Map.entry("系统已激活\n技术服务到期时间： 2025-01-01\n", "ACTIVATED"),
+                        Map.entry("System is not activated.\n", "NOT_ACTIVATED"),
+                        Map.entry("System is activated.\n", "ACTIVATED"),
+                        Map.entry("系统未激活\r\n", "NOT_ACTIVATED"),
+                        Map.entry("  系统激活  \r\n", "ACTIVATED"));
+                for (var item : cases) {
+                    fixture.activation = item.getKey();
+                    var scan = KylinProbe.scan(ssh, "activation", true, "fixture-sudo!!");
+                    assertEquals(item.getValue(), scan.findings().getFirst().status(), item.getKey());
+                }
+                assertTrue(fixture.commands.stream().allMatch(c -> c.startsWith("LC_ALL=C sudo -k -S -p '' -- /bin/bash -c ")));
+                assertTrue(fixture.commands.stream().noneMatch(c -> c.contains("fixture-sudo!!")));
+            }
+        }
+    }
+    @Test void activationShowsOnlyTheExpirationDateForItsStatus() throws Exception {
+        try (var fixture = new Fixture(root.resolve("ssh"))) {
+            var key = KylinSshClient.probe(fixture.host());
+            try (var ssh = KylinSshClient.connect(fixture.host(), "fixture", "fixture-password", key.fingerprint())) {
+                var cases = List.of(
+                        Map.entry("试用到期时间： 2026-07-29\n系统未被激活", "试用期到期时间：2026-07-29"),
+                        Map.entry("系统已激活\n技术服务到期时间： 2025-01-01", "技术服务到期时间：2025-01-01"),
+                        Map.entry("Expiration date of trial: 2026-07-29\nSystem is not activated.", "试用期到期时间：2026-07-29"),
+                        Map.entry("System is activated.\nExpiration date of technical service: 2025-01-01", "技术服务到期时间：2025-01-01"),
+                        Map.entry("系统未激活\n试用期到期时间: 2024-02-29\n技术服务到期时间：2025-01-01", "试用期到期时间：2024-02-29"),
+                        Map.entry("系统已激活\n试用到期时间：2026-07-29\n技术服务到期时间：2025-01-01", "技术服务到期时间：2025-01-01"),
+                        Map.entry("系统未被激活\n技术服务到期时间：2025-01-01", "试用期到期时间：未获取"),
+                        Map.entry("系统已激活\n试用到期时间：2026-07-29", "技术服务到期时间：未获取"),
+                        Map.entry("系统未激活\n试用到期时间：2025-02-29", "试用期到期时间：未获取"),
+                        Map.entry("系统已激活\n技术服务到期时间：2025-01-01\n技术服务到期时间：2026-01-01", "技术服务到期时间：未获取"),
+                        Map.entry("系统已激活\n技术服务到期时间：2025-01-01 sensitive-data", "技术服务到期时间：未获取"),
+                        Map.entry("系统未被激活\n系统已激活\n试用到期时间：2026-07-29", "未获取明确激活状态"));
+                for (var item : cases) {
+                    fixture.activation = item.getKey();
+                    var finding = KylinProbe.scan(ssh, "activation", true, "fixture-sudo!!").findings().getFirst();
+                    assertEquals(item.getValue(), finding.detail(), item.getKey());
+                    if (!item.getValue().equals("未获取明确激活状态"))
+                        assertEquals(item.getValue().startsWith("试用期") ? "NOT_ACTIVATED" : "ACTIVATED", finding.status());
+                }
+                fixture.activation = "系统已激活\n技术服务到期时间：2025-01-01";
+                fixture.activationExitCode = 7;
+                assertEquals("未获取明确激活状态", KylinProbe.scan(ssh, "activation", false, null).findings().getFirst().detail());
+            }
+        }
+    }
+    @Test void activationRejectsFailedAmbiguousAndDateOnlyOutput() throws Exception {
+        try (var fixture = new Fixture(root.resolve("ssh"))) {
+            var key = KylinSshClient.probe(fixture.host());
+            try (var ssh = KylinSshClient.connect(fixture.host(), "fixture", "fixture-password", key.fingerprint())) {
+                for (String output : List.of("", "试用到期时间：2026-07-29", "技术服务到期时间：2025-01-01",
+                        "System is activated.\nSystem is not activated.", "系统已激活\nSystem is not activated.",
+                        "系统未被激活\nSystem is activated.", "Activation service is active")) {
+                    fixture.activation = output;
+                    assertEquals("UNKNOWN", KylinProbe.scan(ssh, "activation", false, null).findings().getFirst().status(), output);
+                }
+                // 清晰文字不能掩盖命令执行失败；也不能把未激活中的activated子串当成已激活。
+                fixture.activationExitCode = 7;
+                for (String output : List.of("System is activated.", "System is not activated.", "系统已激活", "系统未被激活")) {
+                    fixture.activation = output;
+                    assertEquals("UNKNOWN", KylinProbe.scan(ssh, "activation", false, null).findings().getFirst().status(), output);
+                }
+            }
         }
     }
     @Test void serviceKeepsCredentialsOutOfConnectionAndActivationIsReadOnly() throws Exception {
