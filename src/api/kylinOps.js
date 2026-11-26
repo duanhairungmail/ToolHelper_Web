@@ -1,6 +1,6 @@
 import { request, RequestError } from '../utils/request.js'
 
-export function createKylinOpsApi(transport = request) {
+export function createKylinOpsApi(transport = request, binaryTransport = (...args) => fetch(...args)) {
   let token, bootstrap
   async function session(signal) {
     if (!bootstrap) bootstrap = transport('/api/v1/session', { headers: { 'X-ToolHelper-Client': 'web' }, signal })
@@ -27,7 +27,35 @@ export function createKylinOpsApi(transport = request) {
     }
   }
   const id = value => encodeURIComponent(value)
+  async function binary(path, body, signal) {
+    if (!token) await session(signal)
+    const controller = new AbortController(), abort = () => controller.abort()
+    if (signal?.aborted) abort()
+    signal?.addEventListener('abort', abort, { once: true })
+    const timer = setTimeout(abort, 40000)
+    try {
+    const response = await binaryTransport('/api/v1/kylin' + path, { method: body ? 'POST' : 'GET', signal: controller.signal,
+      headers: { 'X-ToolHelper-Session': token, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}) })
+    if (!response.ok) {
+      if (response.status === 401) token = undefined
+      let payload
+      try { payload = await response.json() } catch { payload = {} }
+      throw new RequestError(payload.error?.message || '读取文件失败', { status: response.status, code: payload.error?.code || 'DOWNLOAD_FAILED', requestId: payload.requestId })
+    }
+    return await response.blob()
+    } catch (failure) {
+      if (failure instanceof RequestError) throw failure
+      throw new RequestError('文件读取未完成，请刷新状态后重试', { code: 'DOWNLOAD_FAILED' })
+    } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort) }
+  }
   return {
+    activationCurrent: signal => call('/activation-tasks/current', 'GET', undefined, signal),
+    activate: (body, signal) => call('/activation-tasks', 'POST', body, signal),
+    continueActivation: (taskId, body, signal) => call(`/activation-tasks/${id(taskId)}/continue`, 'POST', body, signal),
+    cancelActivation: (taskId, signal) => call(`/activation-tasks/${id(taskId)}`, 'DELETE', undefined, signal),
+    activationQr: (taskId, signal) => binary(`/activation-tasks/${id(taskId)}/qr`, undefined, signal),
+    activationExport: (body, signal) => binary('/activation-export', body, signal),
     capabilities: signal => call('/capabilities', 'GET', undefined, signal),
     current: signal => call('/connections/current', 'GET', undefined, signal),
     probe: (body, signal) => call('/host-key-probes', 'POST', body, signal),

@@ -19,7 +19,22 @@ public final class KylinModels {
     public record ScanRequest(String connectionId, String feature, String sudoPassword) {
         @Override public String toString() { return "ScanRequest[redacted]"; }
     }
-    public record Scan(String feature, String revision, List<Finding> findings, Instant checkedAt) {}
+    public record ActivationInfo(String serialNumber, String serialStatus) {}
+    public record Scan(String feature, String revision, List<Finding> findings, Instant checkedAt, ActivationInfo activation) {
+        public Scan(String feature, String revision, List<Finding> findings, Instant checkedAt) { this(feature, revision, findings, checkedAt, null); }
+    }
+    public record ActivationRequest(String connectionId, String serialNumber, boolean confirmed,
+            boolean serialDifferenceConfirmed, String sudoPassword) {
+        @Override public String toString() { return "ActivationRequest[redacted]"; }
+    }
+    public record ActivationContinue(String activationCode) {
+        @Override public String toString() { return "ActivationContinue[redacted]"; }
+    }
+    public record ActivationExport(String stationName, String serialNumber, String activationKey, String activationCode) {
+        @Override public String toString() { return "ActivationExport[redacted]"; }
+    }
+    public record ActivationTask(String taskId, String connectionId, String status, String step, String code,
+            String message, boolean qrReady, Instant expiresAt, Scan scan) {}
     public record Params(String desktopUser, String schedule, Integer journalDays, Integer fileDays, String listenAddress,
             Integer port, String allowedCidr, List<String> optimizationIds, String backupId) {}
     public record PlanRequest(String connectionId, String feature, String action, Params params, String sudoPassword) {

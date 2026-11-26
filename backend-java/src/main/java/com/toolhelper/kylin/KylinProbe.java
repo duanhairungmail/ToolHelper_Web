@@ -142,8 +142,11 @@ public final class KylinProbe {
             boolean yes = lines.stream().anyMatch(s -> s.equals("系统激活") || s.contains("系统已激活") || s.equals("System is activated."));
             String status = reply.exitCode() == 0 && no != yes ? no ? "NOT_ACTIVATED" : "ACTIVATED" : "UNKNOWN";
             if (status.equals("UNKNOWN")) LOG.warn("Kylin激活状态无法判断 exitCode={} activatedMarker={} notActivatedMarker={}", reply.exitCode(), yes, no);
+            var serialReply = ssh.run(KylinActivation.SERIAL_SCRIPT, sudo, password, 30, () -> false);
+            var serial = serialReply.exitCode() == 0 ? KylinActivation.parseSerial(serialReply.output()) : new ActivationInfo(null, "UNREADABLE");
             findings.add(new Finding("activation", status, activationDetail(status, lines)));
             state = Map.of("activation", status);
+            return new Scan(feature, revision(state), List.copyOf(findings), Instant.now(), serial);
         } else if (feature.equals("patch")) {
             return KylinPatch.scan(ssh);
         } else {

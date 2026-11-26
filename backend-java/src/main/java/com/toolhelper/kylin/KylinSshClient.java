@@ -102,6 +102,55 @@ public final class KylinSshClient implements AutoCloseable {
         }
     }
     public boolean connected() { return session.isOpen() && session.isAuthenticated(); }
+    /** 专用于激活的固定PTY命令；不接受前端命令文本，sudo密码按明确提示发送。 */
+    public Interactive activationChannel(boolean sudo) {
+        if (!connected()) throw new ApiException(409, "SSH_DISCONNECTED", "SSH已断开，请重新连接");
+        String program = "export LC_ALL=C.UTF-8 LANG=C.UTF-8 TERM=xterm QRCODE_TYPE=XPM; exec kylin-system-verify";
+        String command = "stty -echo; exec " + (sudo ? "sudo -k -S -p '[TOOLHELPER_SUDO]' -- " : "") + "/bin/bash -c " + quote(program);
+        org.apache.sshd.client.channel.ChannelExec channel = null;
+        var output = new InteractiveOutput();
+        try {
+            channel = session.createExecChannel(command);
+            channel.setUsePty(true); channel.setPtyType("xterm"); channel.setPtyColumns(1024); channel.setPtyLines(80);
+            channel.setOut(output); channel.setErr(output);
+            channel.open().verify(Duration.ofSeconds(15));
+            return new Interactive(channel, output);
+        } catch (IOException | RuntimeException failure) {
+            if (channel != null) channel.close(true).awaitUninterruptibly(5000);
+            output.clear();
+            throw new ApiException(502, "SSH_IO_ERROR", "无法建立激活交互通道");
+        }
+    }
+    private static final class InteractiveOutput extends ByteArrayOutputStream {
+        boolean overflow;
+        @Override public synchronized void write(byte[] bytes, int offset, int length) {
+            int remaining = OUTPUT_LIMIT - count;
+            if (length > remaining) overflow = true;
+            super.write(bytes, offset, Math.min(length, remaining));
+        }
+        @Override public synchronized void write(int value) { if (count >= OUTPUT_LIMIT) overflow = true; else super.write(value); }
+        synchronized String content() {
+            if (overflow) throw new ApiException(502, "SSH_OUTPUT_LIMIT", "激活输出超过限制，需核对远程状态");
+            return toString(StandardCharsets.UTF_8);
+        }
+        synchronized void clear() { Arrays.fill(buf, (byte) 0); reset(); }
+    }
+    public static final class Interactive implements AutoCloseable {
+        private final org.apache.sshd.client.channel.ChannelExec channel;
+        private final InteractiveOutput output;
+        private Interactive(org.apache.sshd.client.channel.ChannelExec channel, InteractiveOutput output) { this.channel = channel; this.output = output; }
+        public String output() { return output.content(); }
+        public boolean closed() { return channel.isClosed(); }
+        public Integer exitCode() { return channel.getExitStatus(); }
+        public void send(String value) {
+            byte[] bytes = (value + "\n").getBytes(StandardCharsets.UTF_8);
+            try { channel.getInvertedIn().write(bytes); channel.getInvertedIn().flush(); }
+            catch (IOException failure) { throw new ApiException(502, "SSH_IO_ERROR", "激活通道异常，请重新检测目标状态"); }
+            finally { Arrays.fill(bytes, (byte) 0); }
+        }
+        public void pause() { channel.waitFor(EnumSet.of(ClientChannelEvent.CLOSED), 100); }
+        @Override public void close() { channel.close(true).awaitUninterruptibly(5000); output.clear(); }
+    }
     public static String quote(String value) { return "'" + value.replace("'", "'\\''") + "'"; }
     public Reply run(String script, boolean root, String sudoPassword, int seconds, BooleanSupplier cancelled) {
         if (cancelled.getAsBoolean()) throw new ApiException(409, "CANCELLED", "命令派发前已取消");

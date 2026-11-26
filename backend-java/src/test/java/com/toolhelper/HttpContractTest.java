@@ -129,10 +129,20 @@ class HttpContractTest {
             assertEquals(4, json.readTree(kylinCaps.body()).path("data").path("assets").size());
             assertEquals("1.0.0.33-0k1.11", json.readTree(kylinCaps.body()).path("data").path("patch").path("version").asText());
             assertEquals("REPAIR", json.readTree(kylinCaps.body()).path("data").path("features").get(5).path("actions").get(0).asText());
-            for (String path : List.of("/connections/current", "/tasks/active")) {
+            for (String path : List.of("/connections/current", "/tasks/active", "/activation-tasks/current")) {
                 var idle = client.send(HttpRequest.newBuilder(URI.create(kylin + path)).header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());
                 assertTrue(json.readTree(idle.body()).path("data").isNull());
             }
+            assertEquals(401, client.send(HttpRequest.newBuilder(URI.create(kylin + "/activation-tasks/current")).GET().build(), HttpResponse.BodyHandlers.ofString()).statusCode());
+            var qrMissing = client.send(HttpRequest.newBuilder(URI.create(kylin + "/activation-tasks/missing/qr")).header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(404, qrMissing.statusCode()); assertEquals("no-store", qrMissing.headers().firstValue("Cache-Control").orElse(""));
+            String activationExportBody = json.writeValueAsString(Map.of("stationName", "测试站", "serialNumber", "000123456", "activationKey", "export-secret-key", "activationCode", "export-generated-code"));
+            var activationExport = client.send(HttpRequest.newBuilder(URI.create(kylin + "/activation-export")).header("X-ToolHelper-Session", token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(activationExportBody)).build(), HttpResponse.BodyHandlers.ofByteArray());
+            assertEquals(200, activationExport.statusCode()); assertEquals('P', activationExport.body()[0]); assertEquals('K', activationExport.body()[1]);
+            assertEquals("no-store", activationExport.headers().firstValue("Cache-Control").orElse(""));
+            assertEquals(400, client.send(HttpRequest.newBuilder(URI.create(kylin + "/activation-tasks")).header("X-ToolHelper-Session", token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"connectionId\":\"none\",\"serialNumber\":\"123456789\",\"command\":\"untrusted\"}")).build(), HttpResponse.BodyHandlers.ofString()).statusCode());
             var invalidPlan = client.send(HttpRequest.newBuilder(URI.create(kylin + "/plans")).header("X-ToolHelper-Session", token).header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString("{\"connectionId\":\"none\",\"feature\":\"logs\",\"action\":\"DEPLOY\",\"command\":\"reboot\"}")).build(), HttpResponse.BodyHandlers.ofString());
             assertEquals(400, invalidPlan.statusCode());
@@ -180,7 +190,7 @@ class HttpContractTest {
             var stopped = client.send(HttpRequest.newBuilder(URI.create(validation + "/auto-detection?connectionId=" + connection)).header("X-ToolHelper-Session", token).DELETE().build(), HttpResponse.BodyHandlers.ofString());
             assertEquals(200, stopped.statusCode(), stopped.body());
             String log = Files.readString(logFile);
-            for (String secret : List.of("fixture-password", "fixture-token", "raw-sensitive-response")) assertFalse(log.contains(secret), "日志泄漏测试字段");
+            for (String secret : List.of("fixture-password", "fixture-token", "raw-sensitive-response", "export-secret-key", "export-generated-code")) assertFalse(log.contains(secret), "日志泄漏测试字段");
             for (String body : List.of(
                     "{\"type\":\"MYSQL\",\"host\":\"localhost\",\"port\":3306,\"username\":\"u\",\"args\":[\"--help\"]}",
                     "{\"type\":\"POSTGRESQL\",\"host\":\"localhost\",\"port\":5432.5,\"username\":\"u\"}",

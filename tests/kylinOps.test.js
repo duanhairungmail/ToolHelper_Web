@@ -5,12 +5,12 @@ import { createKylinOpsApi } from '../src/api/kylinOps.js'
 import { useKylinOps, kylinLabel } from '../src/composables/useKylinOps.js'
 
 const settle = async () => { for (let i = 0; i < 4; i++) await new Promise(resolve => setImmediate(resolve)) }
-function mount(overrides = {}) {
+function mount(overrides = {}, confirm = () => true) {
   let state
   const api = { capabilities: async () => ({ features: [{ id: 'activation', actions: [] }, { id: 'logs', actions: ['DEPLOY'] }] }),
     current: async () => ({ connectionId: 'c1' }), active: async () => null, backups: async () => [], ...overrides }
   const renderer = createRenderer({ createComment: () => ({}), insert() {}, remove() {}, parentNode() {}, nextSibling() {} })
-  const app = renderer.createApp({ setup() { state = useKylinOps(api, () => true); return () => null } })
+  const app = renderer.createApp({ setup() { state = useKylinOps(api, confirm); return () => null } })
   app.mount({})
   return { state, api, unmount: () => app.unmount() }
 }
@@ -241,5 +241,83 @@ test('预检与确认执行共用本次sudo密码，输入框清空后不必二�
     vm.state.sudoPassword.value = 'single-use'; await vm.state.beginAction('DEPLOY')
     assert.equal(vm.state.sudoPassword.value, '')
     await vm.state.approve(); assert.equal(writes, 1)
+  } finally { vm.unmount() }
+})
+
+test('阶段7获取二维码后等待人工，继续只发送生成的激活码，完成后显示检测结果', async () => {
+  let job = null, starts = 0, continuations = 0
+  const scan = { feature: 'activation', checkedAt: new Date().toISOString(), activation: { serialNumber: '123456789' }, findings: [{ status: 'NOT_ACTIVATED' }] }
+  const vm = mount({
+    scan: async () => scan,
+    activationCurrent: async () => job,
+    activationQr: async () => new Blob(['png'], { type: 'image/png' }),
+    activate: async body => {
+      starts++; assert.equal(body.serialNumber, '123456789'); assert.equal(body.sudoPassword, 'sudo-secret')
+      assert.equal(body.activationKey, undefined); assert.equal(body.hostSn, undefined)
+      job = { taskId: 'activation-1', connectionId: 'c1', status: 'RUNNING', step: 'WAITING_CODE', qrReady: true, scan, expiresAt: new Date(Date.now() + 600000).toISOString() }
+      return job
+    },
+    continueActivation: async (id, body) => {
+      continuations++; assert.equal(id, 'activation-1'); assert.deepEqual(body, { activationCode: 'generated-code' })
+      job = { ...job, status: 'SUCCEEDED', step: 'COMPLETED', qrReady: false, scan: { ...scan, checkedAt: new Date(Date.now() + 1000).toISOString(), findings: [{ status: 'ACTIVATED' }] } }
+      return job
+    }
+  })
+  try {
+    await settle(); vm.state.sudoPassword.value = 'sudo-secret'; await vm.state.openActivation()
+    Object.assign(vm.state.activationForm.value, { stationName: '站A', activationKey: 'original-key' })
+    await vm.state.startActivation()
+    assert.equal(starts, 1); assert.equal(continuations, 0); assert.ok(vm.state.activationQrUrl.value)
+    assert.equal(vm.state.activationRecord.value.activationKey, 'original-key')
+    vm.state.activationForm.value.activationCode = 'generated-code'
+    await vm.state.submitActivationCode(); await vm.state.submitActivationCode()
+    assert.equal(continuations, 1); assert.equal(vm.state.scan.value.findings[0].status, 'ACTIVATED')
+    assert.equal(vm.state.activationRecord.value.activationCode, 'generated-code')
+    assert.equal(vm.state.activationQrUrl.value, '')
+  } finally { vm.unmount() }
+})
+
+test('阶段7启动响应丢失只查原任务，不重复启动；连接改变清空记录', async () => {
+  let starts = 0, current = { connectionId: 'c1' }, job = null
+  const scan = { feature: 'activation', findings: [{ status: 'NOT_ACTIVATED' }], activation: { serialNumber: '123456789' } }
+  const vm = mount({ current: async () => current, scan: async () => scan, activationCurrent: async () => job,
+    activationQr: async () => new Blob(['png']), cancelActivation: async () => {},
+    activate: async () => { starts++; job = { taskId: 'a1', connectionId: 'c1', status: 'RUNNING', step: 'GETTING_QR' }; throw { code: 'REQUEST_OUTCOME_UNKNOWN', message: 'lost response' } }
+  })
+  try {
+    await settle(); await vm.state.openActivation()
+    Object.assign(vm.state.activationForm.value, { stationName: 'A', activationKey: 'secret' })
+    await vm.state.startActivation(); await vm.state.startActivation()
+    assert.equal(starts, 1); assert.equal(vm.state.activationTask.value.taskId, 'a1')
+    job = null; current = { connectionId: 'c2' }; await vm.state.refresh()
+    assert.equal(vm.state.activationRecord.value, null); assert.equal(vm.state.activationForm.value.activationKey, '')
+  } finally { vm.unmount() }
+})
+
+test('阶段7已激活不可打开激活弹窗，导出补录不启动命令，旧任务不覆盖更新检测', async () => {
+  const oldScan = { feature: 'activation', checkedAt: '2026-01-01T00:00:00Z', findings: [{ status: 'NOT_ACTIVATED' }] }
+  const latestScan = { feature: 'activation', checkedAt: '2026-02-01T00:00:00Z', findings: [{ status: 'ACTIVATED' }], activation: { serialNumber: '123456789' } }
+  const vm = mount({ scan: async () => latestScan, activationCurrent: async () => ({ taskId: 'a1', connectionId: 'c1', status: 'FAILED', scan: oldScan }) })
+  try {
+    await settle(); await vm.state.openActivation(); assert.equal(vm.state.activationDialog.value, '')
+    await vm.state.refresh(); assert.equal(vm.state.scan.value.findings[0].status, 'ACTIVATED')
+    vm.state.openActivationExport(); assert.equal(vm.state.activationDialog.value, 'export')
+    assert.equal(vm.state.activationForm.value.serialNumber, '123456789')
+  } finally { vm.unmount() }
+})
+
+test('阶段7序列号不同先确认，拒绝不启动；同意后提交差异确认并支持取消原任务', async () => {
+  let accepted = false, starts = 0, cancelled = 0, job = null
+  const scan = { feature: 'activation', findings: [{ status: 'NOT_ACTIVATED' }], activation: { serialNumber: '123456789' } }
+  const vm = mount({ scan: async () => scan, activationCurrent: async () => job,
+    activate: async body => { starts++; assert.equal(body.serialDifferenceConfirmed, true); assert.equal(body.serialNumber, '987654321'); return job = { taskId: 'a1', connectionId: 'c1', status: 'RUNNING', step: 'GETTING_QR' } },
+    cancelActivation: async id => { assert.equal(id, 'a1'); cancelled++; return job = { ...job, status: 'CANCELLED', step: 'GETTING_QR' } }
+  }, message => { assert.match(message, /123456789/); assert.match(message, /987654321/); return accepted })
+  try {
+    await settle(); await vm.state.openActivation()
+    Object.assign(vm.state.activationForm.value, { stationName: '站A', serialNumber: '987654321', activationKey: 'key' })
+    await vm.state.startActivation(); assert.equal(starts, 0); assert.equal(vm.state.activationDraft.value, true)
+    accepted = true; await vm.state.startActivation(); assert.equal(starts, 1)
+    await vm.state.cancel(); assert.equal(cancelled, 1); assert.equal(vm.state.activationRunning.value, false)
   } finally { vm.unmount() }
 })

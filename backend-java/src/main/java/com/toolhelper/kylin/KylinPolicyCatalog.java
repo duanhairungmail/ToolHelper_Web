@@ -11,7 +11,7 @@ public final class KylinPolicyCatalog {
     public static final String DATABASE = "/data/usershare/firestation/db/opengauss/data/single_node";
     public static final String BACKUPS = "/var/lib/toolhelper/operations/";
     public static final List<Feature> FEATURES = List.of(
-        new Feature("activation", "系统激活", "只读检测，不执行未经校准的密钥激活", List.of()),
+        new Feature("activation", "系统激活", "检测激活状态；微信扫描目标二维码取得激活码后提交密钥激活", List.of()),
         new Feature("reboot", "定时重启（自动登录）", "按目标时区执行；默认带LightDM临时自动登录，重启后清理", List.of("DEPLOY", "UNINSTALL", "RESTORE")),
         new Feature("logs", "日志优化", "先预览保留规则；已删除的日志不能恢复", List.of("DEPLOY", "CLEAN_NOW", "UNINSTALL", "RESTORE")),
         new Feature("vnc", "VNC Server", "默认回环监听；LAN监听需显式选择，口令不出现在命令行", List.of("DEPLOY", "START", "STOP", "UNINSTALL", "RESTORE")),

@@ -32,6 +32,7 @@ public class KylinOpsService implements AutoCloseable {
     private Instant touched;
     private boolean busy;
     private Job active;
+    private KylinActivation.Operation activation;
     private static final class Job {
         final String id = UUID.randomUUID().toString();
         final Connection connection; final KylinPlanService.Prepared prepared;
@@ -52,7 +53,7 @@ public class KylinOpsService implements AutoCloseable {
     public Map<String, Object> capabilities() {
         return Map.of("version", KylinPolicyCatalog.VERSION, "features", KylinPolicyCatalog.FEATURES,
                 "optimizations", KylinPolicyCatalog.OPTIMIZATIONS, "limits", Map.of("connections", 1, "tasks", 1, "outputBytes", KylinSshClient.OUTPUT_LIMIT, "idleSeconds", 900, "planSeconds", 300),
-                "patchStatus", "USER_PROVIDED_PATCH", "patch", KylinPatch.metadata(), "activation", "READ_ONLY", "assets", KylinTemplates.assets());
+                "patchStatus", "USER_PROVIDED_PATCH", "patch", KylinPatch.metadata(), "activation", "INTERACTIVE_QR", "assets", KylinTemplates.assets());
     }
     public synchronized HostKey probe(Host request) { idle(); return keys.probe(KylinSshClient.validate(request.host(), request.port())); }
     public synchronized HostKey trust(TrustRequest request) { idle(); return keys.trust(request); }
@@ -78,6 +79,7 @@ public class KylinOpsService implements AutoCloseable {
     }
     public synchronized void disconnect(String id) { idle(); require(id); disconnectInternal(); }
     private void disconnectInternal() {
+        if (activation != null) { activation.cancelled = true; activation.clear(); activation = null; }
         if (ssh != null) ssh.close(); ssh = null; connection = null; plans.clear();
     }
     private Connection require(String id) {
@@ -145,12 +147,61 @@ public class KylinOpsService implements AutoCloseable {
         });
         return job.snapshot();
     }
-    public synchronized Task active() { return active == null ? null : active.snapshot(); }
+    public synchronized ActivationTask activate(ActivationRequest request) {
+        idle(); Connection current = require(request.connectionId());
+        if (!request.confirmed()) throw new ApiException(400, "KYLIN_CONFIRMATION_REQUIRED", "请核对目标并确认获取二维码");
+        KylinActivation.text(request.serialNumber(), "服务序列号", 128, true);
+        if (!request.serialNumber().matches("[0-9]{8,128}")) throw new ApiException(400, "INVALID_ACTIVATION_SERIAL", "服务序列号需为至少8位数字");
+        KylinActivation.text(request.sudoPassword(), "sudo密码", 2048, false);
+        if (activation != null) activation.clear();
+        var operation = new KylinActivation.Operation(current.connectionId()); activation = operation;
+        busy = true; plans.clear();
+        KylinSshClient transport = ssh; boolean needsSudo = sudo();
+        worker.submit(() -> {
+            LOG.info("Kylin激活任务开始 taskId={}", operation.id);
+            try { KylinActivationExecutor.execute(operation, transport, needsSudo, request); }
+            catch (ApiException failure) {
+                operation.errorCode = failure.code();
+                operation.status = operation.submitted ? "UNKNOWN_REMOTE_STATE" : operation.cancelled ? "CANCELLED" : "FAILED";
+                if (failure.code().equals("KYLIN_ACTIVATION_REJECTED")) operation.status = "FAILED";
+                operation.message = failure.getMessage();
+                LOG.warn("Kylin激活任务未完成 taskId={} code={} status={}", operation.id, failure.code(), operation.status);
+            } catch (RuntimeException failure) {
+                operation.errorCode = "KYLIN_ACTIVATION_ERROR"; operation.status = operation.submitted ? "UNKNOWN_REMOTE_STATE" : "FAILED";
+                operation.message = "激活交互异常，请重新检测目标状态；未自动重试";
+                LOG.error("Kylin激活任务异常 taskId={} type={}", operation.id, failure.getClass().getSimpleName());
+            } finally {
+                operation.clear(); operation.finished = Instant.now();
+                synchronized (KylinOpsService.this) { busy = false; touched = Instant.now(); }
+                LOG.info("Kylin激活任务结束 taskId={} status={} code={}", operation.id, operation.status, operation.errorCode);
+            }
+        });
+        return operation.snapshot();
+    }
+    public synchronized ActivationTask activationCurrent() { return activation == null ? null : activation.snapshot(); }
+    private KylinActivation.Operation activation(String id) {
+        if (activation == null || !activation.id.equals(id) || connection == null || !activation.connectionId.equals(connection.connectionId()))
+            throw new ApiException(404, "KYLIN_ACTIVATION_NOT_FOUND", "激活任务不存在或连接已变更");
+        return activation;
+    }
+    public synchronized ActivationTask activationTask(String id) { return activation(id).snapshot(); }
+    public synchronized byte[] activationQr(String id) { return activation(id).qr(); }
+    public synchronized ActivationTask continueActivation(String id, ActivationContinue request) {
+        var operation = activation(id); require(operation.connectionId); operation.submit(request.activationCode()); return operation.snapshot();
+    }
+    public synchronized ActivationTask cancelActivation(String id) {
+        var operation = activation(id);
+        if (operation.finished == null) { operation.cancelled = true; operation.status = "CANCELLING"; operation.clear(); }
+        return operation.snapshot();
+    }
+    public synchronized Task active() { return activation != null && activation.finished == null ? activation.task() : active == null ? null : active.snapshot(); }
     public synchronized Task task(String id) {
+        if (activation != null && activation.id.equals(id)) return activation.task();
         Job job = tasks.get(id); if (job == null) throw new ApiException(404, "KYLIN_TASK_NOT_FOUND", "任务不存在或服务已重启");
         return job.snapshot();
     }
     public synchronized Task cancel(String id) {
+        if (activation != null && activation.id.equals(id)) { cancelActivation(id); return activation.task(); }
         Job job = tasks.get(id); if (job == null) throw new ApiException(404, "KYLIN_TASK_NOT_FOUND", "任务不存在");
         if (job.finished == null) { job.cancelled.set(true); job.status = "CANCELLING"; } return job.snapshot();
     }
@@ -162,7 +213,7 @@ public class KylinOpsService implements AutoCloseable {
     }
     @PreDestroy public void close() {
         sweeper.shutdownNow();
-        synchronized (this) { if (active != null) active.cancelled.set(true); }
+        synchronized (this) { if (active != null) active.cancelled.set(true); if (activation != null) activation.cancelled = true; }
         worker.shutdown();
         try { worker.awaitTermination(10, TimeUnit.SECONDS); } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
         synchronized (this) { disconnectInternal(); }
