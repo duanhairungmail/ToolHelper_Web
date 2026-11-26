@@ -53,19 +53,22 @@ export function useKylinOps(api = kylinOpsApi, confirm = message => window.confi
     try {
       const [capabilities, current, active] = await Promise.all([api.capabilities(signal), api.current(signal), api.active(signal)])
       if (disposed || ticket !== generation) return
-      caps.value = capabilities; connection.value = current
+      // 后端忙碌时可能返回 connected=false 的连接快照；把它当作已断开，
+      // 否则页面仍隐藏主机输入框和探测/连接按钮，用户只能刷新才能恢复。
+      const liveConnection = current?.connected === false ? null : current
+      caps.value = capabilities; connection.value = liveConnection
       if (active) task.value = active
       else if (task.value && runningStates.includes(task.value.status)) {
         const completed = await api.task(task.value.taskId, signal)
         if (disposed || ticket !== generation) return
         task.value = completed
       }
-      if (current && !runningStates.includes(task.value?.status)) {
-        const records = await api.backups(current.connectionId, signal)
+      if (liveConnection && !runningStates.includes(task.value?.status)) {
+        const records = await api.backups(liveConnection.connectionId, signal)
         if (disposed || ticket !== generation) return
         backups.value = records
       }
-      if (!current) { plan.value = null; scan.value = null; backups.value = [] }
+      if (!liveConnection) { plan.value = null; scan.value = null; backups.value = [] }
     } catch (failure) { if (!disposed && ticket === generation) { clearRejectedSudo(failure); error.value = failure } }
     finally { if (!disposed && ticket === generation) { clearTimeout(timer); timer = setTimeout(refresh, running.value ? 1000 : 10000) } }
   }

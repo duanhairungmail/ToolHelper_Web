@@ -143,6 +143,32 @@ test('当前连接sudo验证一次后跨扫描与部署复用，切换功能和�
   } finally { vm.unmount() }
 })
 
+test('自动断开返回connected=false时清理陈旧连接并允许再次探测和连接', async () => {
+  let current = { connectionId: 'c1', connected: true }
+  let probes = 0, connects = 0
+  const vm = mount({
+    current: async () => current,
+    probe: async () => { probes++; return { host: '192.168.1.10', port: 22, fingerprint: 'SHA256:fixture', trusted: true } },
+    connect: async () => { connects++; return { connectionId: 'c2', connected: true, username: 'fixture', system: { uid: '1000' } } }
+  })
+  try {
+    await settle()
+    assert.equal(vm.state.connection.value.connectionId, 'c1')
+    current = { ...current, connected: false }
+    await vm.state.refresh()
+    assert.equal(vm.state.connection.value, null)
+
+    vm.state.host.value = '192.168.1.10'; vm.state.port.value = 22
+    await vm.state.probe()
+    assert.equal(vm.state.key.value.trusted, true)
+    vm.state.username.value = 'fixture'; vm.state.password.value = 'fixture-password'
+    await vm.state.connect()
+    assert.equal(probes, 1); assert.equal(connects, 1)
+    assert.equal(vm.state.connection.value.connectionId, 'c2')
+    assert.equal(vm.state.error.value, null)
+  } finally { vm.unmount() }
+})
+
 test('连接变化、认证失败、主动清除和断开不会继续复用sudo密码', async () => {
   let currentId = 'c1', rejected = false, active = null
   const submitted = []
