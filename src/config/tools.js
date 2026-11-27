@@ -11,7 +11,7 @@ export const tools = [
   { id: 'ping', group: '调试工具', name: '群 Ping', keywords: '网络检测', lead: '批量检测网段可达性、延迟与丢包。', action: '导入目标' },
   { id: 'cron', group: '调试工具', name: 'Cron 表达式', keywords: '日期', lead: '生成表达式并预览未来执行时间。', action: '复制表达式' },
   { id: 'sql', group: '调试工具', name: 'SQL 语句生成与格式化', keywords: 'SELECT INSERT UPDATE', lead: '同屏完成 SQL 生成、格式化、复制与下载。', action: '加载 SQL' },
-  { id: 'aes', group: '调试工具', name: 'AES 加密/解密', keywords: 'CBC ECB GCM', lead: '配置 AES 参数并在本机完成加密和解密。', action: '重置参数' }
+  { id: 'aes', group: '调试工具', name: 'AES 加密/解密', keywords: 'AES CBC ECB CTR GCM 加密 解密', lead: '在本机执行AES加密与解密，支持标准参数及旧版兼容解密。', action: '重置参数' }
 ]
 
 export const toolGroups = [...new Set(tools.map((tool) => tool.group))]

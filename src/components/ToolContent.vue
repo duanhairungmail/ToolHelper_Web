@@ -13,6 +13,7 @@ import ModbusTool from './ModbusTool.vue'
 import PingTool from './PingTool.vue'
 import CronTool from './CronTool.vue'
 import SqlTool from './SqlTool.vue'
+import AesTool from './AesTool.vue'
 import { useLogDrawer } from '@/composables/useLogDrawer'
 import { useAppStore } from '@/stores/app'
 
@@ -20,8 +21,6 @@ const props = defineProps({ toolId: { type: String, required: true } })
 const store = useAppStore()
 const { expanded, lines, append, clear } = useLogDrawer(['[10:24:18] 页面已就绪'])
 const rawExpanded = ref(false)
-const aesInput = ref('')
-const aesOutput = ref('')
 
 const hasLog = computed(() => ['remote', 'database', 'api', 'nodered'].includes(props.toolId))
 
@@ -54,9 +53,7 @@ function runAction(message) {
 
     <SqlTool v-else-if="toolId === 'sql'" />
 
-    <template v-else-if="toolId === 'aes'">
-      <BasePanel title="AES 参数" description="支持模式、填充、密钥长度、编码和输出格式。"><div class="form-grid"><label class="field"><span>运算模式</span><select class="input"><option>CBC</option><option>ECB</option><option>GCM</option></select></label><label class="field"><span>密钥</span><input class="input" placeholder="输入密钥 KEY"></label><label class="field"><span>偏移量 IV</span><input class="input" placeholder="输入偏移量 IV"></label></div></BasePanel><div class="equal-columns equal-height top-gap"><BasePanel title="输入"><textarea v-model="aesInput" class="input textarea fill"></textarea><div class="button-row top-gap"><button class="btn btn-primary" @click="aesOutput = btoa(unescape(encodeURIComponent(aesInput)))">加密</button><button class="btn btn-secondary">解密</button></div></BasePanel><BasePanel title="输出结果"><template #actions><button class="btn btn-ghost" @click="aesOutput = ''">清空</button></template><textarea v-model="aesOutput" class="codebox fill" readonly></textarea></BasePanel></div>
-    </template>
+    <AesTool v-else-if="toolId === 'aes'" />
 
     <template v-else>
       <BasePanel :title="toolId === 'nodered' ? 'Node-RED 便携运行时' : toolId === 'api' ? '连接与认证' : '功能控制台'"><div class="form-grid"><label class="field"><span>目标地址</span><input class="input" placeholder="输入目标地址"></label><label class="field"><span>端口</span><input class="input" value="8080"></label></div><div class="button-row top-gap"><button class="btn btn-primary" @click="runAction('执行')">执行</button><button class="btn btn-secondary">刷新</button></div></BasePanel><BasePanel title="结果详情"><div class="empty-state">尚未执行操作，结果将在这里显示。</div></BasePanel><LogDrawer v-if="hasLog" v-model:expanded="expanded" :lines="lines" @clear="clear" /></template>

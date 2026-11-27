@@ -82,6 +82,7 @@ public class LocalRequestFilter extends OncePerRequestFilter {
             }
             int limit = Set.of("/api/v1/device-mac/ledger/save", "/api/v1/device-mac/queries", "/api/v1/device-mac/export")
                     .contains(request.getRequestURI()) ? macRequestBytes
+                    : Set.of("/api/v1/aes/encrypt", "/api/v1/aes/decrypt").contains(request.getRequestURI()) ? 8 * 1024 * 1024
                     : request.getRequestURI().equals("/api/v1/sql/format") ? 2 * 1024 * 1024
                     : request.getRequestURI().equals("/api/v1/sql/generate") ? 256 * 1024
                     : Set.of("/api/v1/ping/targets/parse", "/api/v1/ping/tasks", "/api/v1/ping/export")

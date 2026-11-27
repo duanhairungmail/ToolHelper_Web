@@ -98,4 +98,15 @@ class LocalRequestFilterTest {
         }
         var unknown = request("POST", "/api/v1/sql/format/extra"); unknown.setContent(new byte[20000]); reject(unknown, 413);
     }
+
+    @Test void aesCryptoEndpointsHaveDedicatedEightMiBLimitIncludingChunkedBodies() throws Exception {
+        for (String path : java.util.List.of("/api/v1/aes/encrypt", "/api/v1/aes/decrypt")) {
+            var valid = request("POST", path); valid.setContent(new byte[100000]);
+            filter.doFilter(valid, new MockHttpServletResponse(), (a, b) ->
+                    assertEquals(100000, ((HttpServletRequest) a).getInputStream().readAllBytes().length));
+            var large = configure(new MockHttpServletRequest("POST", path) { @Override public long getContentLengthLong() { return -1; } });
+            large.setContent(new byte[8 * 1024 * 1024 + 1]); reject(large, 413);
+        }
+        var unrelated = request("POST", "/api/v1/aes/random"); unrelated.setContent(new byte[20000]); reject(unrelated, 413);
+    }
 }
