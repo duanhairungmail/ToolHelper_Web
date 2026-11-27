@@ -675,3 +675,27 @@ API 位于 `/api/v1/ping` 并沿用本机会话与 Host/Origin 校验：
 | POST | `/export` | 导出该任务已完成结果为 CSV 或 XLSX |
 
 POST/DELETE 失败时不自动重放；刷新后页面只查询活动任务，不自动再次提交。无需额外依赖，不访问目标网络的定向 Java 测试覆盖输入边界、Windows中英文及Unix统计解析、任务幂等、停止和部分结果导出。
+
+## 14. 阶段11：Cron 表达式
+
+`/tools/cron` 使用现有 Spring `CronExpression` 与 JDK `java.time`，不新增依赖。独立于阶段3 `ValidationCron` 和 Kylin 定时策略，不改变这两个模块的语法和调度行为。该工具仅计算时间，不执行命令、不创建调度器、不保存历史。
+
+- 默认 `SPRING_6`：秒、分、时、日、月、周；支持基础规则、月/周英文别名及合法 `L/W/#` 组合。`#` 限1–5；日中的 `W` 限1–31。拒绝年份、宏和命令整行。
+- `FIVE_FIELD_SUBSET`：分、时、日、月、周；仅数字及 `* , - /`，内部补0秒计算。不自动猜测模式或删除秒字段。
+- 星期0/7为周日、1为周一；两个模式均拒绝日与周同时具体约束，以免与Unix Cron语义混淆。只有字面 `*` 或六段日/周的 `?` 算未限制。
+- 生成器支持所有值、固定值、列表、范围、起点/步长，日周互斥；高级表达式保留在手动编辑区，显式生成才替换。
+- 默认 `Asia/Shanghai`、服务端当前时间、预览10次；支持IANA时区、UTC、自定义本地起点。下一时刻严格晚于起点，最多100次、向后8年。返回 `COMPLETE`、`NO_FUTURE_TIME` 或 `WINDOW_END`，语法合法但无日期不伪装成执行成功。
+- 夏令时缺口起点拒绝，重复起点要求明确偏移；后续运行跳过缺口，回拨可能出现本地时间相同但偏移不同的两行。响应同时提供本地时间、偏移、星期和UTC瞬间。
+- 预览默认每页5条，可切换5/10/20/50。修改输入使旧结果立即失效，迟到响应不能覆盖新输入；复制全部预览包含所有分页。剪贴板失败提供可选中文本。草稿仅保留在前端模块内存，刷新清空。
+
+| 方法 | API | 用途 |
+| --- | --- | --- |
+| GET | `/api/v1/cron/capabilities` | 模式、模板、时区及上限 |
+| POST | `/api/v1/cron/analyze` | 校验表达式、字段解释和未来时间 |
+| POST | `/api/v1/cron/generate` | 结构化规则生成并执行同一分析流程 |
+
+所有接口沿用本机来源和会话保护；JSON请求体最多16 KiB、表达式最多128字符，POST不自动重放。`analyze`接受 `mode/expression/zoneId/startLocal/startOffset/count`；`generate`用 `fields` 替代 `expression`，字段名为 `second/minute/hour/day/month/week`（五段不含second），每项为 `kind/values/start/end/step`。
+
+计算使用HTTP异步响应、专用有界线程池（`toolhelper.cron.threads: 2`）、等待队列（`queue-capacity: 8`）及响应预算（`timeout-ms: 2000`）；配置只能下调。队满返回 `CRON_BUSY`，超时返回 `CRON_CALCULATION_TIMEOUT`，不返回不完整的成功预览。中断不保证强制终止单次引擎计算，未退出的计算仍占原线程，不会创建替代线程突破配额。
+
+定向测试覆盖字段和方言、模板与生成一致性、闰年/月末/高级修饰符、混合规则说明、无有效日期与窗口、夏令时缺口/回拨、并发排队/超时/回收、真实HTTP会话与错误契约，以及前端分页、复制和请求生命周期。

@@ -60,6 +60,10 @@ toolhelper:
     max-output-bytes: 65536
     max-tasks: 20
     retention-minutes: 30
+  cron:
+    threads: 2
+    queue-capacity: 8
+    timeout-ms: 2000
 logging:
   file:
     name: ${TOOLHELPER_LOG_FILE:${toolhelper.data-root}/logs/service.log}

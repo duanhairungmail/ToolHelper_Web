@@ -11,6 +11,7 @@ import KylinOpsTool from './KylinOpsTool.vue'
 import SerialTool from './SerialTool.vue'
 import ModbusTool from './ModbusTool.vue'
 import PingTool from './PingTool.vue'
+import CronTool from './CronTool.vue'
 import { useLogDrawer } from '@/composables/useLogDrawer'
 import { useAppStore } from '@/stores/app'
 
@@ -65,6 +66,7 @@ function generateSql() {
     </template>
 
     <PingTool v-else-if="toolId === 'ping'" />
+    <CronTool v-else-if="toolId === 'cron'" />
 
     <template v-else-if="toolId === 'sql'">
       <div class="equal-columns equal-height"><BasePanel title="SQL 生成器"><div class="form-grid two"><label class="field"><span>表名</span><input class="input" value="employees"></label><label class="field"><span>LIMIT</span><input class="input" value="100"></label></div><div class="button-row top-gap"><button class="btn btn-primary" @click="generateSql">生成 SQL</button><button class="btn btn-secondary" @click="conditionDialog = true">添加条件</button><button class="btn btn-secondary" @click="conditionView = true">查看条件</button></div><textarea v-model="sql" class="codebox fill"></textarea></BasePanel><BasePanel title="SQL 格式化"><textarea class="input textarea" value="select id,name from employees;"></textarea><div class="button-row top-gap"><button class="btn btn-primary">格式化</button><button class="btn btn-secondary">复制输出</button></div><pre class="terminal-box fill">SELECT id, name\nFROM employees;</pre></BasePanel></div>

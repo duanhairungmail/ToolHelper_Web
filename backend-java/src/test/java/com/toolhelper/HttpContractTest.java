@@ -38,6 +38,22 @@ class HttpContractTest {
             assertEquals(200, session.statusCode(), session.body());
             String token = json.readTree(session.body()).path("data").path("token").asText();
             assertFalse(token.isBlank());
+            // 阶段11仅计算时间，不启动调度器或探测外部服务；同时验证异步错误契约。
+            assertEquals(401, client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/cron/capabilities")).GET().build(), HttpResponse.BodyHandlers.ofString()).statusCode());
+            var cronCaps = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/cron/capabilities")).header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, cronCaps.statusCode());
+            assertEquals(100, json.readTree(cronCaps.body()).path("data").path("maxCount").asInt());
+            String cronBody = "{\"mode\":\"SPRING_6\",\"expression\":\"0 */5 * * * ?\",\"zoneId\":\"Asia/Shanghai\",\"startLocal\":\"2026-11-27T00:00:00\",\"count\":10}";
+            var cronResult = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/cron/analyze")).header("X-ToolHelper-Session", token).header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(cronBody)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, cronResult.statusCode(), cronResult.body());
+            assertEquals(10, json.readTree(cronResult.body()).path("data").path("times").size());
+            var cronError = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/cron/analyze")).header("X-ToolHelper-Session", token).header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(cronBody.replace("0 */5 * * * ?", "0 0 9 1 * MON"))).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(400, cronError.statusCode(), cronError.body());
+            assertEquals("CRON_DAY_WEEK_CONFLICT", json.readTree(cronError.body()).path("error").path("code").asText());
+            var cronUnknown = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/cron/analyze")).header("X-ToolHelper-Session", token).header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(cronBody.replace("{", "{\"script\":\"bad\","))).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(400, cronUnknown.statusCode());
+            var cronLarge = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/cron/analyze")).header("X-ToolHelper-Session", token).header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(" ".repeat(16385))).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(413, cronLarge.statusCode());
             var pingUnauthorized = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/ping/capabilities")).GET().build(), HttpResponse.BodyHandlers.ofString());
             assertEquals(401, pingUnauthorized.statusCode());
             var pingCapabilities = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/ping/capabilities"))
