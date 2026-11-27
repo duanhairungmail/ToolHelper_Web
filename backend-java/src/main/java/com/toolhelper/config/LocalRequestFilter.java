@@ -28,6 +28,8 @@ public class LocalRequestFilter extends OncePerRequestFilter {
     private int macRequestBytes = 4 * 1024 * 1024;
     @org.springframework.beans.factory.annotation.Value("${toolhelper.druid.max-request-bytes:262144}")
     private int druidRequestBytes = 256 * 1024;
+    @org.springframework.beans.factory.annotation.Value("${toolhelper.serial.max-request-bytes:32768}")
+    private int serialRequestBytes = 32 * 1024;
 
     public LocalRequestFilter(ToolHelperProperties properties, JsonMapper json) {
         this.properties = properties;
@@ -78,6 +80,7 @@ public class LocalRequestFilter extends OncePerRequestFilter {
             }
             int limit = Set.of("/api/v1/device-mac/ledger/save", "/api/v1/device-mac/queries", "/api/v1/device-mac/export")
                     .contains(request.getRequestURI()) ? macRequestBytes
+                    : request.getRequestURI().startsWith("/api/v1/serial/session/") ? serialRequestBytes
                     : request.getRequestURI().equals("/api/v1/druid/scans") ? druidRequestBytes : 16 * 1024;
             if (request.getContentLengthLong() > limit) {
                 reject(response, id, 413, "REQUEST_TOO_LARGE", "请求体超出限制"); return;

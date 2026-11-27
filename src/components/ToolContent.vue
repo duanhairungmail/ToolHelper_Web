@@ -8,15 +8,14 @@ import ApiValidationTool from './ApiValidationTool.vue'
 import DeviceMacTool from './DeviceMacTool.vue'
 import DruidScanTool from './DruidScanTool.vue'
 import KylinOpsTool from './KylinOpsTool.vue'
+import SerialTool from './SerialTool.vue'
+import ModbusTool from './ModbusTool.vue'
 import { useLogDrawer } from '@/composables/useLogDrawer'
 import { useAppStore } from '@/stores/app'
 
 const props = defineProps({ toolId: { type: String, required: true } })
 const store = useAppStore()
 const { expanded, lines, append, clear } = useLogDrawer(['[10:24:18] 页面已就绪'])
-const connected = ref(false)
-const serialText = ref('')
-const serialLogs = ref([])
 const rawExpanded = ref(false)
 const conditions = ref([])
 const conditionDialog = ref(false)
@@ -33,13 +32,6 @@ const hasLog = computed(() => ['remote', 'database', 'api', 'nodered'].includes(
 function runAction(message) {
   append(message)
   store.setStatus(`${message}成功`, 'success')
-}
-
-function sendSerial() {
-  if (!connected.value) return store.setStatus('请先打开串口', 'error')
-  if (!serialText.value.trim()) return store.setStatus('请输入要发送的数据', 'error')
-  serialLogs.value.push(`[发送] ${serialText.value}`)
-  store.setStatus('发送完成', 'success')
 }
 
 function addCondition() {
@@ -69,11 +61,11 @@ function scanPing() {
     <DruidScanTool v-else-if="toolId === 'druid'" />
     <KylinOpsTool v-else-if="toolId === 'kylin'" />
 
-    <template v-else-if="toolId === 'serial'">
-      <div class="equal-columns serial-grid"><div class="stack"><BasePanel title="连接设置"><div class="form-grid two"><label class="field"><span>串口号</span><select class="input"><option>COM3</option><option>COM5</option></select></label><label class="field"><span>波特率</span><select class="input"><option>9600</option><option>115200</option></select></label><label class="field"><span>数据位</span><select class="input"><option>8</option><option>7</option></select></label><label class="field"><span>校验位</span><select class="input"><option>无</option><option>偶校验</option></select></label></div><button class="btn btn-primary top-gap" @click="connected = !connected; store.setStatus(connected ? '串口连接已建立' : '串口已关闭', connected ? 'success' : 'idle')">{{ connected ? '关闭串口' : '打开串口' }}</button></BasePanel><BasePanel title="发送数据"><textarea v-model="serialText" class="input textarea" placeholder="输入十六进制数据"></textarea><button class="btn btn-primary top-gap" @click="sendSerial">发送</button></BasePanel></div><BasePanel title="接收日志"><template #actions><button class="btn btn-ghost" @click="serialLogs = []">清空日志</button></template><pre class="terminal-box fill">{{ serialLogs.length ? serialLogs.join('\n') : '等待串口数据' }}</pre></BasePanel></div>
-    </template>
+    <SerialTool v-else-if="toolId === 'serial'" />
 
-    <template v-else-if="toolId === 'modbus'">
+    <ModbusTool v-else-if="toolId === 'modbus'" />
+
+    <template v-else-if="toolId === 'modbus-placeholder'">
       <div class="equal-columns"><BasePanel title="串口与协议" description="支持申弘版与南瑞怡和版 Modbus RTU。"><div class="form-grid two"><label class="field"><span>协议</span><select class="input"><option>申弘版</option><option>南瑞怡和版</option></select></label><label class="field"><span>串口号</span><select class="input"><option>COM3</option><option>COM5</option></select></label><label class="field"><span>波特率</span><select class="input"><option>9600</option><option>115200</option></select></label><label class="field"><span>设备地址</span><input class="input" value="1"></label></div><div class="button-row top-gap"><button class="btn btn-primary">打开串口</button><button class="btn btn-secondary">扫描设备</button><button class="btn btn-secondary">读取当前设备</button></div></BasePanel><BasePanel title="设备列表"><table><thead><tr><th>地址</th><th>序列号</th><th>在线</th></tr></thead><tbody><tr><td colspan="3" class="muted">打开串口后扫描站端下辖设备</td></tr></tbody></table></BasePanel></div><BasePanel title="解析结果" class="top-gap"><pre class="result-box">（未选中设备）</pre></BasePanel><section class="detail-drawer"><header class="drawer-head"><strong>原始报文</strong><div class="button-row"><button class="btn btn-ghost">清空</button><button class="btn btn-ghost" @click="rawExpanded = !rawExpanded">{{ rawExpanded ? '收起报文' : '展开报文' }}</button></div></header><div v-show="rawExpanded" class="drawer-body"><pre class="terminal-box">等待 Modbus RTU 通信...</pre></div></section>
     </template>
 

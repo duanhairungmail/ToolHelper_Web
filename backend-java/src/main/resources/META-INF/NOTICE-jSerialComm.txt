@@ -1,0 +1,18 @@
+Fazecast jSerialComm
+
+Copyright Fazecast, Inc.
+
+This product includes software developed at Fazecast, Inc: you can
+redistribute it and/or modify it under the terms of either the Apache
+Software License, version 2, or the GNU Lesser General Public License
+as published by the Free Software Foundation, version 3 or above.
+
+jSerialComm is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+or FITNESS FOR A PARTICULAR PURPOSE.
+
+This ToolHelper distribution elects the Apache License, Version 2.0 option.
+See the project-root LICENSE file for the Apache License 2.0 text.
+
+Upstream: https://github.com/Fazecast/jSerialComm
+Maven coordinate: com.fazecast:jSerialComm:2.11.4

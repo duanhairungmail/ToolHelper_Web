@@ -40,6 +40,18 @@ class HttpContractTest {
             assertFalse(token.isBlank());
             var unauthorized = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/plugins/electerm")).GET().build(), HttpResponse.BodyHandlers.ofString());
             assertEquals(401, unauthorized.statusCode());
+            var modbusUnauthorized = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/modbus/session")).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(401, modbusUnauthorized.statusCode());
+            var modbusState = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/modbus/session"))
+                    .header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, modbusState.statusCode(), modbusState.body());
+            assertTrue(json.readTree(modbusState.body()).path("data").isNull(), modbusState.body());
+            var invalidModbusOpen = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/modbus/session"))
+                    .header("X-ToolHelper-Session", token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"port\":\"COM0\",\"baudRate\":9600,\"protocol\":\"SHEN_HONG\"}"))
+                    .build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(400, invalidModbusOpen.statusCode(), invalidModbusOpen.body());
+            assertEquals("INVALID_MODBUS_CONFIG", json.readTree(invalidModbusOpen.body()).path("error").path("code").asText());
             var status = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/plugins/electerm"))
                     .header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());
             assertEquals("NOT_INSTALLED", json.readTree(status.body()).path("data").path("state").asText(), status.body());

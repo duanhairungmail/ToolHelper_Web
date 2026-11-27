@@ -1,6 +1,6 @@
-# Java 本机服务：阶段 1～7 实现与验收说明
+# Java 本机服务：阶段 1～9 实现与验收说明
 
-更新日期：2026-11-26。electerm、DBX、极早期接口验证、设备 MAC 台账、Druid 检测、KylinOS运维策略和密钥激活已接入同一个 Java 本机服务。第 1～6 节保留阶段 1 历史说明，第 7～12 节分别说明阶段 2～7。不同阶段的历史验收结果不互相替代。
+更新日期：2026-11-27。electerm、DBX、极早期接口验证、设备 MAC 台账、Druid 检测、KylinOS运维策略、密钥激活、基本串口调试和极早期 Modbus 调试已接入同一个 Java 本机服务。不同阶段的历史验收结果不互相替代。
 
 ## 1. 已实现范围
 
@@ -10,6 +10,8 @@
 - 官方资产唯一筛选、SHA-256、下载/解压配额、Windows 路径校验、链接与重解析点拒绝。
 - 更新先准备完整候选，再保留便携用户数据并切换；失败恢复旧版，重启检查切换记录。
 - 删除只针对本服务拥有的安装；保留已识别用户数据，不结束用户进程，不接管旧 ToolHelper 或其他 electerm 安装。
+- 基本串口调试：本机Windows串口枚举、单活动会话、参数与流控配置、文本/HEX收发、校验追加、定时发送、有界内存事件和手动TXT导出。
+- 极早期 Modbus RTU：申弘/南瑞怡和协议的固定点表读取、设备扫描、单台读取、逐台轮询、原始报文和手动TXT导出；南瑞复位需二次确认并且只发送一次。两个串口工具共用 `SerialService` 的单活动会话和所有权保护，阻止跨工具读取、写入或关闭。
 
 Java 只提交 GUI/连接请求，不声称窗口已就绪或远程已连接。密码、密钥选择、MFA、首次信任和协议错误在 electerm 中处理，不在 Web 保存凭据。
 
@@ -48,7 +50,15 @@ java -jar backend-java/target/toolhelper-local-service-0.1.0.jar
 | `--toolhelper.data-root=...` | 命令行指定隔离数据目录 |
 | `--logging.file.name=...` | 单独指定日志；未指定时自动跟随最终生效的数据根目录 |
 
+串口调试使用 `com.fazecast:jSerialComm:2.11.4`，按 Apache License 2.0 条款分发；第三方声明见 `src/main/resources/META-INF/NOTICE-jSerialComm.txt`。当前实现只承诺 Windows 11 x64，项目目标运行时为 Java 21。
+
 默认数据根为 `<项目根目录>/.runtime/local-data`，本项目对应 `D:\DevlopProject\ToolHelper_Web\.runtime\local-data`；安装包暂存、插件、便携用户数据、任务与日志均保存在该目录内。VS Code 的 Java 调试配置和 Maven `spring-boot:run` 已将工作目录固定到项目根目录；执行 JAR 时也应先进入项目根目录。相对数据路径以进程工作目录为基准，不依赖项目在某一盘符上的固定位置。
+
+## 极早期 Modbus 调试
+
+页面路径为 `/tools/modbus`，接口位于 `/api/v1/modbus`。串口参数默认 9600、8/N/1；打开串口本身不会发送设备请求。扫描、单台读取和轮询使用用户确认过的厂家映射及有界超时；普通读取最多重试两次，南瑞复位需要明确确认且不自动重试。停止轮询会阻止下一台设备请求，当前单台读取正常完成后停止。
+
+后端及模拟串口测试覆盖 CRC/帧解析、两种协议数据映射、分片响应、扫描与读取、读取重试、复位单次发送、轮询停止、阶段8串口所有权和受保护 HTTP 接口。真实设备通信、站端响应地址/长度与现场映射仍待授权设备验收；本次没有访问实体串口或发送真实设备指令。
 
 例如临时指定另一个项目内数据目录，日志自动写入该目录的 `logs/service.log`：
 
@@ -102,6 +112,16 @@ RemoteTool.vue → useRemotePlugin.js → remotePlugin.js
     ├─ InstallationStore：清单、便携数据、目录切换与恢复
     └─ ProcessAdapter：平台、进程观察、固定参数启动与目录打开
 ```
+
+串口调试的分层边界：
+
+```text
+SerialTool.vue → serial.js → SerialController
+  → SerialService（单会话、生命周期、有界事件、串行TX、周期发送）
+  → SerialPortAdapter → JSerialCommAdapter → Windows COM设备
+```
+
+串口接口位于 `/api/v1/serial`。会话和接收事件仅保存在内存，页面关闭或Java服务退出时释放端口；串口日志不写入业务日志。单次TX上限4096字节，事件缓存最多2000条/约1 MB，前端仅保留最近2000条。
 
 ```text
 <项目根目录>/.runtime/local-data/  # 默认 dataRoot
