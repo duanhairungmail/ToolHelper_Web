@@ -18,6 +18,12 @@
     <jserialcomm.version>2.11.4</jserialcomm.version>
   </properties>
   <dependencies>
+    <!-- 仅使用SQL解析/排版，不启用连接池、监控或自动配置。 -->
+    <dependency>
+      <groupId>com.alibaba</groupId>
+      <artifactId>druid</artifactId>
+      <version>1.2.28</version>
+    </dependency>
     <dependency>
       <groupId>com.fazecast</groupId>
       <artifactId>jSerialComm</artifactId>

@@ -4,7 +4,7 @@
 
 项目基于 Vue 3 和 Vite，采用 Composition API、Vue Router 和组件化布局。已搭建 13 个工具入口；阶段 1 接入 Java 本机服务与 electerm，阶段 2 接入 DBX 插件管理及 MySQL/PostgreSQL 带参连接，阶段 3 接入极早期接口验证、设备与 MQTT 信息、自动检测和表格导出，阶段 4 接入设备 MAC 查询与台账管理，阶段 5 接入 Druid 监控暴露与访问控制检测，阶段 6 接入 KylinOS SSH 运维策略与计划执行，阶段 7 接入二维码密钥激活与激活信息导出，阶段 8 接入本机串口调试，阶段 9 接入两种极早期 Modbus RTU 协议的模拟验收实现。
 
-> 远程、数据库外挂、极早期接口验证、设备 MAC 台账和 Druid 检测已调用真实 Java API。数据库功能已使用隔离 MySQL/PostgreSQL 实例验证；接口验证已使用获授权的局域网目标实测登录、13 个 GET、设备/MQTT 查询及六类表格导出；MAC 查询已核对两个授权目标的 IP/MAC。Druid 按历史未授权漏洞复测，授权目标的 13 个端点均被业务平台登录拦截，结论为“本次未复现：全部检查端点的匿名访问已拦截”。外挂连接的实际认证和会话结果在外挂中查看；远程四协议真实服务验收仍待完成。其余工具仍主要是界面原型；AES 页面尚未实现真正的 AES 加解密。
+> 已实现工具的具体范围与验收限制见下表。数据库功能已使用隔离 MySQL/PostgreSQL 实例验证；接口验证已使用获授权的局域网目标实测登录、13 个 GET、设备/MQTT 查询及六类表格导出；MAC 查询已核对两个授权目标的 IP/MAC。Druid 按历史未授权漏洞复测，授权目标的 13 个端点均被业务平台登录拦截，结论为“本次未复现：全部检查端点的匿名访问已拦截”。外挂连接的实际认证和会话结果在外挂中查看；远程四协议真实服务验收仍待完成。Node-RED、AES 仍为原型，AES 页面尚未实现真正的 AES 加解密。
 
 当前外挂功能仅支持 **Windows x64 当前登录用户的桌面会话**。Java、浏览器和外挂必须位于同一台电脑；将 Java 部署到远端服务器不能打开浏览器所在电脑的外挂。运行、接口及验收说明见 [Java 本机服务文档](backend-java/README.md)。
 
@@ -43,7 +43,7 @@
 | 极早期 Modbus 调试 | `/tools/modbus` | Java 模拟串口实现申弘/南瑞怡和扫描、读取、轮询及确认式南瑞复位；真实设备未验收 |
 | 群 Ping | `/tools/ping` | Vue 目标解析与任务进度页；Java 本机服务解析 IPv4/CIDR/末段范围、调用系统 Ping、取消任务并导出 CSV/XLSX；无 ICMP 回复只标“无响应”，不等同于离线 |
 | Cron 表达式 | `/tools/cron` | Java 校验与生成：Spring六段/五段兼容子集、模板、字段解释、IANA时区与夏令时、未来执行时间分页预览及复制；只计算，不创建调度任务 |
-| SQL 语句生成与格式化 | `/tools/sql` | 简单 SELECT 条件添加与字符串生成；格式化、复制等功能待实现 |
+| SQL 语句生成与格式化 | `/tools/sql` | Java MySQL/PostgreSQL 五类结构化生成、受限保真格式化、UTF-8导入/复制/.sql下载；不连接或执行数据库 |
 | AES 加密/解密 | `/tools/aes` | 参数与输入输出表单；“加密”处理使用 Base64 编码表达式，未实现 AES 或解密 |
 
 ## 环境要求
@@ -76,7 +76,7 @@ mvn -f backend-java/pom.xml spring-boot:run
 
 默认 API 为 `127.0.0.1:18081`，Vite 将 `/api` 代理到该服务；未启动 Java 时远程页面明确显示“本机服务不可用”。端口被占用时启动失败，不自动换端口。
 
-升级到阶段 2/3/4/5/6/7 后，需要启动新 Java 后端（已有实例则先重启），才能加载新增 API；仅刷新前端不能更新运行中的 Java 代码。数据库页面先下载插件，再填写类型、主机、端口、用户名及可选数据库名。MySQL 默认端口 `3306`，PostgreSQL 为 `5432`。
+升级 Java 功能后，需要启动新 Java 后端（已有实例则先重启），才能加载新增 API；仅刷新前端不能更新运行中的 Java 代码。数据库页面先下载插件，再填写类型、主机、端口、用户名及可选数据库名。MySQL 默认端口 `3306`，PostgreSQL 为 `5432`。
 
 密码默认不传，DBX 可能继续要求认证。勾选“本次传递密码”后，密码随本次连接发给 DBX，发起时清空表单，不自动重试、不写入浏览器存储。**密码会进入 DBX 进程命令行，本机有权限的程序可能读取，URI 编码不是加密。** 不接受该限制时，请在 DBX 中完成认证。
 
@@ -87,6 +87,17 @@ mvn -f backend-java/pom.xml spring-boot:run
 外挂版本检查及下载默认跟随本机系统代理规则：有适用的 HTTP 代理时使用代理，没有适用代理时直连，不要求用户安装代理软件。控制台和服务日志中的 `mode=HTTP_PROXY` / `mode=DIRECT` 表示实际选择的路由；代理软件自身的规则由该软件处理。配置与限制见 [下载网络策略](backend-java/README.md#下载网络策略)。
 
 已有本地项目时，直接在项目根目录执行 `npm ci` 和 `npm run dev`。有意调整依赖后，应同步提交更新后的 `package.json` 与 `package-lock.json`。
+
+### 阶段12：SQL 语句生成与格式化
+
+访问 `/tools/sql`，在“SQL 生成”和“SQL 格式化”之间切换。页面采用浅色参数区与深色代码区，生成页左侧填写参数、右侧预览；格式化页左侧输入、右侧输出，窄屏上下排列。代码区提供行号与辅助着色，大结果以纯文本显示；复制和下载均使用服务返回的原始SQL。五类表单分别保留模块内存草稿，刷新清空，不保存 SQL 历史。原设计 demo 已移除。
+
+- MySQL / PostgreSQL 支持 SELECT、单行 INSERT、带 WHERE 的 UPDATE / DELETE、受控 CREATE TABLE。值明确区分字符串、数值、布尔和 NULL；数值按字符串传输，保留大整数和精确小数。空字符串不自动转换 NULL。
+- MySQL 转义选项须与目标库 `sql_mode` 一致；PostgreSQL 生成字符串使用 `E'...'`。名称按原样引用，不自动转换大小写；LIKE 区分普通文本“包含”与原始通配模式。UPDATE / DELETE 不提供无 WHERE 生成选项。
+- 格式化支持关键字大/小写、2/4 空格缩进；按原 token 回放字符串、名称与注释，结构变化时明确拒绝。首版不支持存储过程、客户端命令、模板/参数占位符、hint/可执行注释及 MySQL 双引号语法；部分合法 SQL 因引擎规范化也会被拒绝。
+- 支持 UTF-8 `.sql` 导入、复制、下载，以及生成结果送入格式化。原文最多256 KiB、50条语句、50000 token、64层括号，输出最多1 MiB；工作线程2、等待队列4、响应预算3秒。超时不返回迟到结果，不保证强制结束解析。
+
+后端锁定 `com.alibaba:druid:1.2.28`，仅使用 SQL 文本解析与排版，未启用连接池或监控；Apache 2.0 许可及来源保留在后端 `META-INF`。工具不校验数据库表结构，也不保证任意数据库版本的执行兼容性。接口、边界和配置见 [Java 文档阶段12](backend-java/README.md#15-阶段12sql-语句生成与格式化)。
 
 ### 阶段7：KylinOS密钥激活
 
@@ -197,14 +208,17 @@ ToolHelper_Web/
 │   │   ├── DruidScanTool.vue          # Druid 检测、进度、详情与报告导出
 │   │   ├── LogDrawer.vue              # 公共日志抽屉
 │   │   ├── RemoteTool.vue             # 真实远程外挂管理与连接表单
+│   │   ├── SqlTool.vue                # SQL生成/格式化双页签与输入输出
 │   │   └── ToolContent.vue            # 各工具的内容分支与交互逻辑
 │   ├── composables/useLogDrawer.js    # 日志与抽屉状态复用
 │   ├── composables/useManagedPlugin.js # 两个插件共用状态、任务接续与轮询
 │   ├── composables/useRemotePlugin.js  # electerm 页面适配
 │   ├── composables/useDatabasePlugin.js # DBX 页面适配
 │   ├── composables/useDatabaseConnection.js # 连接字段与本次密码生命周期
+│   ├── composables/useSql.js          # SQL内存草稿、请求取消与结果失效
 │   ├── api/pluginClient.js            # 共用受控 API 与内存 session
 │   ├── api/{remotePlugin,databasePlugin}.js # 固定插件 API 入口
+│   ├── api/sql.js                     # SQL本机会话与文本处理API
 │   ├── config/tools.js                # 工具定义与分组
 │   ├── layouts/AppLayout.vue          # 工作台布局
 │   ├── router/index.js                # 根据工具配置生成路由
@@ -248,8 +262,9 @@ tools.js ──→ router/index.js ──→ ToolView.vue
 ### 状态与公共能力
 
 - `stores/app.js`：通过 `reactive` 定义共享状态，由入口注入；组件使用 `useAppStore()` 获取。当前只管理侧边栏开关与状态栏消息。
-- `ToolContent.vue`：通过 `ref` 管理表单、弹窗、SQL 条件及演示结果等页面状态。
-- `RemoteTool.vue` / `DatabaseTool.vue`：分别通过插件 composable 和 API 模块接入 Java；共用 `useManagedPlugin.js` 与 `api/pluginClient.js`，其余工具分支保留原型。
+- `ToolContent.vue`：按工具ID装配独立组件，仍保留部分未接入服务的演示分支。
+- `RemoteTool.vue` / `DatabaseTool.vue`：分别通过插件 composable 和 API 模块接入 Java；共用 `useManagedPlugin.js` 与 `api/pluginClient.js`。其他已实现工具使用各自组件、composable 与 API 模块。
+- `SqlTool.vue` → `useSql.js` / `api/sql.js` → Java `SqlController` / `sql` 包：生成和格式化均由本机服务完成，不访问数据库；页面修改输入会使旧结果失效。
 - Java 的 `plugin/common` 复用官方传输、安装事务、进程基础操作与管理流程；`plugin/electerm`、`plugin/dbx` 分别限定包结构和连接参数。两个插件共用数据根锁和任务互斥，发行缓存与资产选择隔离，同域名限流冷却共享。
 - `useLogDrawer.js`：管理日志数组、展开状态、追加与清空操作；`LogDrawer.vue` 负责展示。
 - `utils/request.js`：处理 JSON、超时和业务错误，保留错误码及请求标识；副作用请求失败不会自动重放。

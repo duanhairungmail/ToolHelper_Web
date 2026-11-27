@@ -89,4 +89,13 @@ class LocalRequestFilterTest {
         }
         var unrelated = request("POST", "/api/v1/ping/unknown"); unrelated.setContent(new byte[20000]); reject(unrelated, 413);
     }
+    @Test void sqlHasExactPathLimitsIncludingChunkedBodies() throws Exception {
+        var valid = request("POST", "/api/v1/sql/format"); valid.setContent(new byte[500000]);
+        filter.doFilter(valid, new MockHttpServletResponse(), (a, b) -> assertEquals(500000, ((HttpServletRequest) a).getInputStream().readAllBytes().length));
+        for (String path : java.util.List.of("/api/v1/sql/format", "/api/v1/sql/generate")) {
+            var large = configure(new MockHttpServletRequest("POST", path) { @Override public long getContentLengthLong() { return -1; } });
+            large.setContent(new byte[(path.endsWith("format") ? 2 * 1024 * 1024 : 256 * 1024) + 1]); reject(large, 413);
+        }
+        var unknown = request("POST", "/api/v1/sql/format/extra"); unknown.setContent(new byte[20000]); reject(unknown, 413);
+    }
 }

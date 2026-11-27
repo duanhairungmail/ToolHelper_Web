@@ -38,6 +38,23 @@ class HttpContractTest {
             assertEquals(200, session.statusCode(), session.body());
             String token = json.readTree(session.body()).path("data").path("token").asText();
             assertFalse(token.isBlank());
+            // 阶段12只处理SQL文本；确认异步API、字段限制及无凭据访问保护。
+            assertEquals(401, client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/sql/capabilities"))
+                    .GET().build(), HttpResponse.BodyHandlers.ofString()).statusCode());
+            var sqlCaps = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/sql/capabilities"))
+                    .header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, sqlCaps.statusCode(), sqlCaps.body());
+            assertEquals(262144, json.readTree(sqlCaps.body()).path("data").path("maxSqlBytes").asInt());
+            String sqlBody = "{\"dialect\":\"MYSQL\",\"escapeMode\":\"BACKSLASH\",\"sql\":\"select 'a  b' from users;\",\"keywordCase\":\"UPPER\",\"indentSize\":4}";
+            var sqlFormat = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/sql/format"))
+                    .header("X-ToolHelper-Session", token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(sqlBody)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, sqlFormat.statusCode(), sqlFormat.body());
+            assertTrue(json.readTree(sqlFormat.body()).path("data").path("sql").asText().contains("'a  b'"));
+            var sqlUnknown = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/sql/format"))
+                    .header("X-ToolHelper-Session", token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(sqlBody.replace("\"indentSize\":4", "\"indentSize\":4,\"unexpected\":true"))).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(400, sqlUnknown.statusCode(), sqlUnknown.body());
             // 阶段11仅计算时间，不启动调度器或探测外部服务；同时验证异步错误契约。
             assertEquals(401, client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/cron/capabilities")).GET().build(), HttpResponse.BodyHandlers.ofString()).statusCode());
             var cronCaps = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/cron/capabilities")).header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());

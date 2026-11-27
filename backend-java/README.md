@@ -1,6 +1,6 @@
-# Java 本机服务：阶段 1～9 实现与验收说明
+# Java 本机服务：阶段 1～12 实现与验收说明
 
-更新日期：2026-11-27。electerm、DBX、极早期接口验证、设备 MAC 台账、Druid 检测、KylinOS运维策略、密钥激活、基本串口调试和极早期 Modbus 调试已接入同一个 Java 本机服务。不同阶段的历史验收结果不互相替代。
+更新日期：2026-11-27。electerm、DBX、极早期接口验证、设备 MAC 台账、Druid 检测、KylinOS运维策略、密钥激活、基本串口、Modbus、群 Ping、Cron 和 SQL 工具已接入同一个 Java 本机服务。不同阶段的历史验收结果不互相替代。
 
 ## 1. 已实现范围
 
@@ -699,3 +699,65 @@ POST/DELETE 失败时不自动重放；刷新后页面只查询活动任务，�
 计算使用HTTP异步响应、专用有界线程池（`toolhelper.cron.threads: 2`）、等待队列（`queue-capacity: 8`）及响应预算（`timeout-ms: 2000`）；配置只能下调。队满返回 `CRON_BUSY`，超时返回 `CRON_CALCULATION_TIMEOUT`，不返回不完整的成功预览。中断不保证强制终止单次引擎计算，未退出的计算仍占原线程，不会创建替代线程突破配额。
 
 定向测试覆盖字段和方言、模板与生成一致性、闰年/月末/高级修饰符、混合规则说明、无有效日期与窗口、夏令时缺口/回拨、并发排队/超时/回收、真实HTTP会话与错误契约，以及前端分页、复制和请求生命周期。
+
+## 15. 阶段12：SQL 语句生成与格式化
+
+页面 `/tools/sql` 使用 `SqlTool.vue`、`SqlConditions.vue`、`SqlValueInput.vue`，通过 `useSql.js` / `api/sql.js` 调用 `SqlController`。后端 `sql` 包封装请求模型、方言、生成器、词法保护、格式化器与计算服务；`SqlProperties` 负责启动配置校验。SQL仅在内存中处理，不连接数据库、不执行SQL、不写历史或SQL原文日志。
+
+### 使用范围
+
+- 方言为 MySQL / PostgreSQL，默认 MySQL；不自动转换方言、不宣称兼容 openGauss。MySQL 可选 `BACKSLASH` / `NO_BACKSLASH_ESCAPES`，须与目标库一致；PostgreSQL 使用 `STANDARD`，生成字符串明确采用 E 字符串。
+- 五类生成：SELECT（列、条件、排序、LIMIT）、单行 INSERT、UPDATE、DELETE、CREATE TABLE。UPDATE / DELETE 必须有有效条件；条件为单组 AND / OR，不接受任意 SQL 片段。
+- STRING / NUMBER / BOOLEAN / NULL 明确分开，NUMBER 传十进制字符串，避免 JavaScript 数值精度丢失。STRING 空输入是空字符串；NULL 不携带文本。名称按原样引用，MySQL 名称限64字符、PostgreSQL限63 UTF-8字节；允许字母、数字、下划线，不能以数字开头。
+- LIKE 的 `CONTAINS` 自动处理 `%`、`_`、`!` 并使用 `ESCAPE '!'`；`PATTERN` 保留用户通配符。NULL判断使用 IS NULL / IS NOT NULL。
+- 建表支持常用字段类型、长度/精度、主键、唯一、可空、单个整数自增/Identity、字面量默认值和表注释。默认值校验类型、整数范围、DECIMAL精度和字符长度。MySQL固定 InnoDB / utf8mb4，TEXT的主键、唯一及字面量默认值首版拒绝；DATETIME仅MySQL支持。PostgreSQL表注释独立生成 COMMENT ON TABLE。版本差异、日期内容有效性及表结构须由使用者核对。
+
+格式化用锁定的 `com.alibaba:druid:1.2.28`（Apache 2.0），只调用 SQL parser / formatter；未引入 starter、未启用连接池或监控。固定版本许可、发行POM来源保存在 `src/main/resources/META-INF/NOTICE-druid.txt`，许可全文为 `LICENSE-druid.txt`，会随JAR发布。
+
+格式化先有界扫描原文，屏蔽字面量/引号名称、去除普通注释交给引擎解析排版；通过上/小写两份引擎输出识别关键字，再按原token回放受保护内容和注释，并独立比较输出token。只允许关键字大小写和空白排版变化。支持关键字大/小写、2/4空格缩进；保留行注释结束换行、字符串内连续空格/换行、PostgreSQL E/dollar字符串及引号名称。引擎若规范化结构、无法保真，返回 `SQL_FORMAT_NOT_PRESERVED`，不发布部分结果。
+
+首版限 SELECT / INSERT / UPDATE / DELETE / CREATE TABLE / COMMENT 及其中受支持的 WITH 查询；拒绝存储过程、触发器、DELIMITER/psql命令、模板/参数占位符、hint/MySQL可执行注释、MySQL双引号。并非所有合法SQL都能格式化；引擎改写别名、运算符或DDL等价结构时也可能拒绝。
+
+### 接口与资源限制
+
+全部接口沿用回环地址、Host/Origin、本机会话与JSON结构保护，响应不缓存。GET可在会话失效后恢复一次，POST不自动重放。
+
+| 方法 | API | 主要字段 |
+| --- | --- | --- |
+| GET | `/api/v1/sql/capabilities` | 返回方言、类型、选项、配额及不支持清单 |
+| POST | `/api/v1/sql/generate` | `dialect/escapeMode/statementType/schema/table`及对应的`select/insert/update/delete/create`之一 |
+| POST | `/api/v1/sql/format` | `dialect/escapeMode/sql/keywordCase/indentSize` |
+
+生成示例：
+
+```json
+{
+  "dialect": "MYSQL", "escapeMode": "BACKSLASH", "statementType": "SELECT",
+  "table": "devices",
+  "select": {
+    "allColumns": true, "columns": [], "junction": "AND",
+    "conditions": [{"column": "sn", "operator": "=", "value": {"type": "STRING", "value": "00123"}}],
+    "orders": [], "limit": "10"
+  }
+}
+```
+
+响应 `data` 包含 `sql/dialect/statementCount/warnings`。业务错误包括 `SQL_INVALID_INPUT`、`SQL_WHERE_REQUIRED`、`SQL_UNSUPPORTED_DIALECT`、`SQL_UNSUPPORTED_SYNTAX`、`SQL_FORMAT_NOT_PRESERVED`、`SQL_TOO_LARGE`、`SQL_TOO_COMPLEX`、`SQL_BUSY`、`SQL_TIMEOUT`；解析器异常不原样泄漏SQL片段。
+
+原始SQL/UTF-8导入限256 KiB，生成请求256 KiB、格式化JSON请求2 MiB（兼顾转义膨胀）。请求过滤器仅对这两个POST精确路径设置额度；其他路径不放宽。生成最多100字段、50条件、10排序；格式化最多50语句、50000 token、64层括号，输出限1 MiB。
+
+`toolhelper.sql` 默认 `threads: 2`、`queue-capacity: 4`、`timeout-ms: 3000`，配置只能下调。使用专用有界线程池和HTTP异步响应，队满快速拒绝，超时丢弃迟到结果并移除等待任务。Future取消/中断不保证强制终止解析；未退出的计算继续占原线程，不新增替代线程。
+
+前端双页签和五类草稿只保留模块内存，刷新清空；修改输入使结果失效，取消和版本号防止迟到覆盖。支持严格UTF-8/BOM导入、复制和`.sql`下载；导入失败保留原文。生成结果送入格式化时，已有不同输入需要确认替换。
+
+### 本轮验证与限制（2026-11-27）
+
+- `npm test`：83项全部通过；`npm run build`通过。
+- Java最终全量196项中192通过、1失败、1错误、2项官方插件实包可选测试跳过。SQL定向15项全部通过。全量未通过的是既有Modbus停止轮询用例和electerm目录恢复用例，后者日志为Windows移动临时目录的AccessDeniedException；两类随后单独重跑8项全部通过，不能据此宣称全量稳定通过。日志为`.runtime/sql-prototype/full-test-final.log`和`existing-retest-final.log`。
+- 隔离JAR在18092启动，能力接口、PostgreSQL精确数值/字符串生成并送入格式化、无WHERE拒绝通过HTTP实测；真实HTTP测试也覆盖会话保护和未知字段拒绝。未执行真实数据库SQL。
+- 标准 `backend-java/target` 打包在Spring Boot重命名 `.jar.original` 时失败，权限提升后仍失败，原因未确认，未停止用户Java进程。使用项目内临时POM指向相同源码、资源和dist，以独立输出目录成功生成并启动可执行包：`.runtime/sql-prototype/target/toolhelper-local-service-0.1.0.jar`。标准target中约3.6 MB的普通JAR不可当成此次可运行Boot包。
+- 浏览器访问新来源 `http://127.0.0.1:18092` 被自动审批拒绝，原因是该来源尚无明确授权；已提交授权请求。页面目视、窄屏和浏览器复制/下载验收待完成。
+
+后续页面样式移植：采用用户确认的浅色参数区/深色代码区，保留显式Java生成和格式化、五类表单、转义选项、导入/复制/下载及结果失效机制；预览增加行号和辅助着色，大文本只显示原文。独立demo及路由已移除。用户随后明确授权浏览器访问 `http://127.0.0.1:5173/tools/sql`，已通过该正式页面验证生成、格式化、送入格式化、复制成功提示、`.sql`下载及窄屏上下布局；下载内容与服务结果一致，含HTML样式内容的字符串仅作为文本显示。83项前端测试及生产构建通过。该次授权只用于此次页面验收，不更改先前18092来源的授权状态。
+
+开发使用原启动方式：在项目根目录分别运行 `npm run dev` 和 `mvn -f backend-java/pom.xml spring-boot:run`。已有Java实例需由用户重启以载入新增API。验收可运行包也可从项目根目录运行 `java -jar .runtime/sql-prototype/target/toolhelper-local-service-0.1.0.jar`；默认18081端口须空闲，不能与现有服务冲突。

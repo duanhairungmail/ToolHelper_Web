@@ -1,0 +1,8 @@
+ToolHelper SQL文本处理使用 Alibaba Druid 1.2.28
+坐标：com.alibaba:druid:1.2.28
+上游：https://github.com/alibaba/druid/tree/1.2.28
+许可证：Apache License 2.0（见同目录 LICENSE-druid.txt）
+固定版本许可证依据：https://raw.githubusercontent.com/alibaba/druid/1.2.28/license.txt
+发行POM：https://repo.maven.apache.org/maven2/com/alibaba/druid/1.2.28/druid-1.2.28.pom
+Copyright 2018 Alibaba Group Holding Ltd.
+本项目仅调用SQL parser/formatter，不启用数据库连接池、监控或Druid Spring Boot starter。
