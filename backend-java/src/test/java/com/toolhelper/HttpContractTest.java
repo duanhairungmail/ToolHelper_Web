@@ -38,6 +38,20 @@ class HttpContractTest {
             assertEquals(200, session.statusCode(), session.body());
             String token = json.readTree(session.body()).path("data").path("token").asText();
             assertFalse(token.isBlank());
+            var pingUnauthorized = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/ping/capabilities")).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(401, pingUnauthorized.statusCode());
+            var pingCapabilities = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/ping/capabilities"))
+                    .header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, pingCapabilities.statusCode(), pingCapabilities.body());
+            assertEquals(4096, json.readTree(pingCapabilities.body()).path("data").path("limits").path("maxTargets").asInt());
+            var pingParse = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/ping/targets/parse"))
+                    .header("X-ToolHelper-Session", token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"text\":\"127.0.0.1\\n127.0.0.1\"}")).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, pingParse.statusCode(), pingParse.body());
+            assertEquals(1, json.readTree(pingParse.body()).path("data").path("total").asInt());
+            var pingInactive = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/ping/tasks/active"))
+                    .header("X-ToolHelper-Session", token).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertTrue(json.readTree(pingInactive.body()).path("data").isNull());
             var unauthorized = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/plugins/electerm")).GET().build(), HttpResponse.BodyHandlers.ofString());
             assertEquals(401, unauthorized.statusCode());
             var modbusUnauthorized = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/modbus/session")).GET().build(), HttpResponse.BodyHandlers.ofString());

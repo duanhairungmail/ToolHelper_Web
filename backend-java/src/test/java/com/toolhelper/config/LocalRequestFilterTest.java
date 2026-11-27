@@ -80,4 +80,13 @@ class LocalRequestFilterTest {
             var body = request("POST", path); body.setContent(new byte[20000]); reject(body, 413);
         }
     }
+    @Test void onlyPingTargetTaskAndExportPayloadsReceiveTheirLargerRequestLimit() throws Exception {
+        for (String path : java.util.List.of("/api/v1/ping/targets/parse", "/api/v1/ping/tasks", "/api/v1/ping/export")) {
+            var valid = request("POST", path); valid.setContent(new byte[20000]);
+            filter.doFilter(valid, new MockHttpServletResponse(), (a, b) -> assertEquals(20000, ((HttpServletRequest) a).getInputStream().readAllBytes().length));
+            var large = configure(new MockHttpServletRequest("POST", path) { @Override public long getContentLengthLong() { return -1; } });
+            large.setContent(new byte[4 * 1024 * 1024 + 1]); reject(large, 413);
+        }
+        var unrelated = request("POST", "/api/v1/ping/unknown"); unrelated.setContent(new byte[20000]); reject(unrelated, 413);
+    }
 }

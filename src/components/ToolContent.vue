@@ -10,6 +10,7 @@ import DruidScanTool from './DruidScanTool.vue'
 import KylinOpsTool from './KylinOpsTool.vue'
 import SerialTool from './SerialTool.vue'
 import ModbusTool from './ModbusTool.vue'
+import PingTool from './PingTool.vue'
 import { useLogDrawer } from '@/composables/useLogDrawer'
 import { useAppStore } from '@/stores/app'
 
@@ -24,8 +25,6 @@ const condition = ref({ field: '', op: '=', value: '' })
 const sql = ref('SELECT id, name, department\nFROM employees\nORDER BY id ASC\nLIMIT 100;')
 const aesInput = ref('')
 const aesOutput = ref('')
-const pingTarget = ref('')
-const pingTotal = ref(0)
 
 const hasLog = computed(() => ['remote', 'database', 'api', 'nodered'].includes(props.toolId))
 
@@ -46,10 +45,6 @@ function generateSql() {
   sql.value = `SELECT id, name, department\nFROM employees${where}\nORDER BY id ASC\nLIMIT 100;`
 }
 
-function scanPing() {
-  pingTotal.value = pingTarget.value.endsWith('/24') ? 254 : pingTarget.value ? 1 : 0
-  store.setStatus(pingTotal.value ? `已载入 ${pingTotal.value} 个目标` : '请输入检测目标', pingTotal.value ? 'success' : 'error')
-}
 </script>
 
 <template>
@@ -69,9 +64,7 @@ function scanPing() {
       <div class="equal-columns"><BasePanel title="串口与协议" description="支持申弘版与南瑞怡和版 Modbus RTU。"><div class="form-grid two"><label class="field"><span>协议</span><select class="input"><option>申弘版</option><option>南瑞怡和版</option></select></label><label class="field"><span>串口号</span><select class="input"><option>COM3</option><option>COM5</option></select></label><label class="field"><span>波特率</span><select class="input"><option>9600</option><option>115200</option></select></label><label class="field"><span>设备地址</span><input class="input" value="1"></label></div><div class="button-row top-gap"><button class="btn btn-primary">打开串口</button><button class="btn btn-secondary">扫描设备</button><button class="btn btn-secondary">读取当前设备</button></div></BasePanel><BasePanel title="设备列表"><table><thead><tr><th>地址</th><th>序列号</th><th>在线</th></tr></thead><tbody><tr><td colspan="3" class="muted">打开串口后扫描站端下辖设备</td></tr></tbody></table></BasePanel></div><BasePanel title="解析结果" class="top-gap"><pre class="result-box">（未选中设备）</pre></BasePanel><section class="detail-drawer"><header class="drawer-head"><strong>原始报文</strong><div class="button-row"><button class="btn btn-ghost">清空</button><button class="btn btn-ghost" @click="rawExpanded = !rawExpanded">{{ rawExpanded ? '收起报文' : '展开报文' }}</button></div></header><div v-show="rawExpanded" class="drawer-body"><pre class="terminal-box">等待 Modbus RTU 通信...</pre></div></section>
     </template>
 
-    <template v-else-if="toolId === 'ping'">
-      <div class="equal-columns ping-grid"><BasePanel title="目标与检测" description="支持 CIDR 网段、末段范围和文本目标列表。"><label class="field"><span>网段或范围</span><input v-model="pingTarget" class="input" placeholder="192.168.1.0/24"></label><div class="button-row top-gap"><button class="btn btn-primary" @click="scanPing">扫描网段</button><button class="btn btn-secondary">导入文件</button><button class="btn btn-secondary">开始 Ping</button></div></BasePanel><div class="metric-grid"><div class="metric"><span>目标总数</span><strong>{{ pingTotal }}</strong></div><div class="metric"><span>在线</span><strong>0</strong></div><div class="metric"><span>离线</span><strong>0</strong></div><div class="metric"><span>平均延迟</span><strong>0 ms</strong></div></div></div><BasePanel title="检测结果" class="top-gap"><table><thead><tr><th>目标</th><th>状态</th><th>平均延迟</th><th>丢包率</th></tr></thead><tbody><tr><td colspan="4" class="muted">请先扫描网段或导入文件</td></tr></tbody></table></BasePanel>
-    </template>
+    <PingTool v-else-if="toolId === 'ping'" />
 
     <template v-else-if="toolId === 'sql'">
       <div class="equal-columns equal-height"><BasePanel title="SQL 生成器"><div class="form-grid two"><label class="field"><span>表名</span><input class="input" value="employees"></label><label class="field"><span>LIMIT</span><input class="input" value="100"></label></div><div class="button-row top-gap"><button class="btn btn-primary" @click="generateSql">生成 SQL</button><button class="btn btn-secondary" @click="conditionDialog = true">添加条件</button><button class="btn btn-secondary" @click="conditionView = true">查看条件</button></div><textarea v-model="sql" class="codebox fill"></textarea></BasePanel><BasePanel title="SQL 格式化"><textarea class="input textarea" value="select id,name from employees;"></textarea><div class="button-row top-gap"><button class="btn btn-primary">格式化</button><button class="btn btn-secondary">复制输出</button></div><pre class="terminal-box fill">SELECT id, name\nFROM employees;</pre></BasePanel></div>

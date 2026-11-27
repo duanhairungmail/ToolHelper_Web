@@ -52,6 +52,14 @@ toolhelper:
     max-requests: 16
     max-response-bytes: 1048576
     max-request-bytes: 262144
+  ping:
+    max-targets: 4096
+    max-concurrency: 200
+    max-file-bytes: 2097152
+    max-request-bytes: 4194304
+    max-output-bytes: 65536
+    max-tasks: 20
+    retention-minutes: 30
 logging:
   file:
     name: ${TOOLHELPER_LOG_FILE:${toolhelper.data-root}/logs/service.log}
