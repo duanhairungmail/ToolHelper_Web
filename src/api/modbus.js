@@ -29,7 +29,12 @@ export function createModbusApi(transport = request) {
   }
   return {
     capabilities: signal => call('/capabilities', 'GET', undefined, signal),
-    ports: signal => call('/ports', 'GET', undefined, signal),
+    ports: async signal => {
+      const result = await call('/ports', 'GET', undefined, signal)
+      // Modbus接口附带端口占用信息，页面选择器只接收其中的串口数组。
+      if (!Array.isArray(result?.ports)) throw new RequestError('串口列表响应格式无效', { code: 'INVALID_RESPONSE' })
+      return result.ports
+    },
     session: signal => call('/session', 'GET', undefined, signal),
     open: (body, signal) => call('/session', 'POST', body, signal),
     close: (id, signal) => call(`/session/${encodeURIComponent(id)}`, 'DELETE', undefined, signal),
