@@ -35,6 +35,7 @@
 | 远程外挂连接 | `/tools/remote` | Java 插件管理、真实状态与任务轮询、四协议参数传递；当前适配 electerm 5.12.6，真实协议连接待验收 |
 | 数据库外挂连接 | `/tools/database` | Java 管理 DBX 下载、启动、更新、删除、打开目录；MySQL/PostgreSQL 带参连接，密码显式选择本次传递 |
 | 极早期接口验证 | `/tools/api` | Java 登录、固定接口串行验证、全量设备ID/MQTT主题查询、Cron自动检测、清空日志、当前表格xlsx/docx导出；不建立MQTT订阅连接 |
+| 极早期Modbus协议模拟 | `/tools/early-modbus-mqtt` | Java 连接 MQTT 3.1.1 TCP Broker，多网关独立订阅 RTU 查询，按绑定设备应答 FC 01/03/04；操作说明见 backend-java/README.md |
 | 获取设备 MAC 地址 | `/tools/mac` | Java 查询 Windows 本机 IPv4 邻居映射；JSON 台账编辑/保存、单行/批量通信、取消、复制、选择行列导出 xlsx/docx |
 | Node-RED 可视化编排 | `/tools/nodered` | 通用控制台及日志占位；未接入 Node-RED 运行时或编辑器 |
 | Druid 漏洞检测 | `/tools/druid` | Java 固定13项只读规则、显式批量/取消、脱敏证据、可选单组Druid凭据验证、按目标/列导出xlsx/docx；不覆盖全部CVE |

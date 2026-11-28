@@ -1,0 +1,7 @@
+ToolHelper 本机服务使用 Eclipse Paho Java MQTT v3 client 1.2.5。
+Maven: org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.2.5
+来源：https://github.com/eclipse-paho/paho.mqtt.java/tree/v1.2.5
+Paho 按 Eclipse Public License 2.0 和 Eclipse Distribution License 1.0 双重许可提供。
+原始许可证随客户端 JAR 的 about.html、META-INF 和源码提供。
+https://www.eclipse.org/legal/epl-2.0/
+https://www.eclipse.org/org/documents/edl-v10.php

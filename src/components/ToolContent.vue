@@ -10,6 +10,7 @@ import DruidScanTool from './DruidScanTool.vue'
 import KylinOpsTool from './KylinOpsTool.vue'
 import SerialTool from './SerialTool.vue'
 import ModbusTool from './ModbusTool.vue'
+import EarlyModbusMqttTool from './EarlyModbusMqttTool.vue'
 import PingTool from './PingTool.vue'
 import CronTool from './CronTool.vue'
 import SqlTool from './SqlTool.vue'
@@ -43,6 +44,8 @@ function runAction(message) {
     <SerialTool v-else-if="toolId === 'serial'" />
 
     <ModbusTool v-else-if="toolId === 'modbus'" />
+
+    <EarlyModbusMqttTool v-else-if="toolId === 'early-modbus-mqtt'" />
 
     <template v-else-if="toolId === 'modbus-placeholder'">
       <div class="equal-columns"><BasePanel title="串口与协议" description="支持申弘版与南瑞怡和版 Modbus RTU。"><div class="form-grid two"><label class="field"><span>协议</span><select class="input"><option>申弘版</option><option>南瑞怡和版</option></select></label><label class="field"><span>串口号</span><select class="input"><option>COM3</option><option>COM5</option></select></label><label class="field"><span>波特率</span><select class="input"><option>9600</option><option>115200</option></select></label><label class="field"><span>设备地址</span><input class="input" value="1"></label></div><div class="button-row top-gap"><button class="btn btn-primary">打开串口</button><button class="btn btn-secondary">扫描设备</button><button class="btn btn-secondary">读取当前设备</button></div></BasePanel><BasePanel title="设备列表"><table><thead><tr><th>地址</th><th>序列号</th><th>在线</th></tr></thead><tbody><tr><td colspan="3" class="muted">打开串口后扫描站端下辖设备</td></tr></tbody></table></BasePanel></div><BasePanel title="解析结果" class="top-gap"><pre class="result-box">（未选中设备）</pre></BasePanel><section class="detail-drawer"><header class="drawer-head"><strong>原始报文</strong><div class="button-row"><button class="btn btn-ghost">清空</button><button class="btn btn-ghost" @click="rawExpanded = !rawExpanded">{{ rawExpanded ? '收起报文' : '展开报文' }}</button></div></header><div v-show="rawExpanded" class="drawer-body"><pre class="terminal-box">等待 Modbus RTU 通信...</pre></div></section>

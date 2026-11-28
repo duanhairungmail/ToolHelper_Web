@@ -54,6 +54,28 @@ java -jar backend-java/target/toolhelper-local-service-0.1.0.jar
 
 默认数据根为 `<项目根目录>/.runtime/local-data`，本项目对应 `D:\DevlopProject\ToolHelper_Web\.runtime\local-data`；安装包暂存、插件、便携用户数据、任务与日志均保存在该目录内。VS Code 的 Java 调试配置和 Maven `spring-boot:run` 已将工作目录固定到项目根目录；执行 JAR 时也应先进入项目根目录。相对数据路径以进程工作目录为基准，不依赖项目在某一盘符上的固定位置。
 
+## 极早期 Modbus 协议 MQTT 模拟
+
+入口 `/tools/early-modbus-mqtt`，接口 `/api/v1/mqtt-modbus`。Java 21 服务使用已批准的 Eclipse Paho 1.2.5，支持 MQTT 3.1.1 的 `mqtt://` / `tcp://` 连接，首版不支持 TLS 或 WebSocket。第三方声明见 `src/main/resources/META-INF/NOTICE-Paho.txt`。
+
+1. 添加网关和设备，指定唯一绑定、从站地址、Broker；可填写 Client ID、用户名、密码与自定义上下行主题。主题留空按 `firetopic/{gatewayId}/down` 和 `/up` 派生，Client ID 留空随机生成。
+2. 点击“连接当前网关”，后端订阅 down。监测软件发来的 MQTT payload 必须是完整的原始 RTU 二进制帧，包含 CRC，不带 MBAP，也不是 HEX 文本或 JSON。
+3. 后端仅在收到查询后应答到该网关 up。支持 FC 01 读取 10 个线圈、03 读取 39 个保持寄存器、04 读取 63 个输入寄存器；地址从 1 开始，寄存器高字节先发、CRC 低字节先发、线圈低位先打包。发布 Retain=false，默认 QoS 0。
+4. 运行中修改寄存器后，点击“应用当前网关设备数据”；服务端用 expectedVersion 校验并原子替换整个网关的数据快照。绑定、地址和设备增删需先停止全部活动网关再编辑。当前网关 Broker、主题、QoS 与 Client ID 运行时锁定。
+5. 点击“停止当前网关”释放该客户端，其余网关继续运行。页面每 15 秒续租，离开后停止续租；最后一次心跳后 60 秒到期，后台每 5 秒回收。返回时恢复仍活动的会话，刷新页面恢复服务端运行快照；服务退出后会话不持久化。
+
+限制为 8 个并发网关、每网关 247 台设备、64 条处理队列、每会话 200 条事件、RTU 单帧 256 字节、HTTP 请求体 512 KiB。一个网关最多一个会话；同 Broker 的 Client ID 和收发主题不能冲突，设备 ID 不能同时属于两个活动会话。Broker 地址按协议、主机名和端口规范化，不探测不同 DNS 别名是否指向同一 Broker，配置时需统一写法。
+
+API 包括 capabilities、sessions 创建/列表/状态/删除、events?after=cursor、profile 和 heartbeat，沿用本机会话令牌与 requestId/data/error。游标过期返回 gap=true 和现有事件窗口。POST/DELETE 结果不明时前端只查询状态核对，不自动重发。断线和发布失败进入 FAILED，关闭连接并保留可查询的错误事件，用户停止后才能重新连接；不自动重连。
+
+CRC 错误、非法长度、未知从站及带 Retain 标记的历史查询重放被丢弃。可识别设备的越界请求按 V1.5 文档返回异常：01 起始地址、02 数量、03 地址加数量；未支持的写功能返回功能异常，绝不执行写入。MQTT 3.1.1 实时转发会清除 Retain 标记，因此实时收到的查询仍正常处理；发布测试查询应使用 Retain=false。
+
+密码仅用于连接过程，随后清空页面字段和 Paho 选项，不写日志、事件、API 状态或持久化存储。事件记录网关、设备、方向、主题、长度、地址、功能码、CRC 状态、HEX、结果与配置版本；界面收包/发布计数独立于本地预览。单次 `publish` 完成只表示客户端完成对应 QoS 的发送流程，不证明监测软件已解析。
+
+协议原文的 CRC 表格算法对 `01 01 00 01 00 0A` 得到 `ED CD`。原文线圈示例 `00 9F` 与低位打包正文不一致，当前按正文与标准低位打包；ASCII 每寄存器低字节一个字符及软件版本长度仍需现场帧核对。设备完整数据与报警界面在目标虚拟机上的端到端验收尚未执行。
+
+固定向量、参数、HTTP 保护和实际 EMQX 隔离测试见 `src/test/java/com/toolhelper/mqttmodbus/`。普通 `mvn test` 不自动连接外部 Broker；真实 MQTT 集成测试需显式指定隔离地址，例如 `mvn '-Dmqtt.test.broker=tcp://127.0.0.1:21883' '-Dtest=EarlyModbusCodecTest,MqttModbusHttpTest,MqttModbusIntegrationTest' test`。不要使用生产主题执行该测试。
+
 ## 极早期 Modbus 调试
 
 页面路径为 `/tools/modbus`，接口位于 `/api/v1/modbus`。串口参数默认 9600、8/N/1；打开串口本身不会发送设备请求。扫描、单台读取和轮询使用用户确认过的厂家映射及有界超时；普通读取最多重试两次，南瑞复位需要明确确认且不自动重试。停止轮询会阻止下一台设备请求，当前单台读取正常完成后停止。
@@ -761,3 +783,14 @@ POST/DELETE 失败时不自动重放；刷新后页面只查询活动任务，�
 后续页面样式移植：采用用户确认的浅色参数区/深色代码区，保留显式Java生成和格式化、五类表单、转义选项、导入/复制/下载及结果失效机制；预览增加行号和辅助着色，大文本只显示原文。独立demo及路由已移除。用户随后明确授权浏览器访问 `http://127.0.0.1:5173/tools/sql`，已通过该正式页面验证生成、格式化、送入格式化、复制成功提示、`.sql`下载及窄屏上下布局；下载内容与服务结果一致，含HTML样式内容的字符串仅作为文本显示。83项前端测试及生产构建通过。该次授权只用于此次页面验收，不更改先前18092来源的授权状态。
 
 开发使用原启动方式：在项目根目录分别运行 `npm run dev` 和 `mvn -f backend-java/pom.xml spring-boot:run`。已有Java实例需由用户重启以载入新增API。验收可运行包也可从项目根目录运行 `java -jar .runtime/sql-prototype/target/toolhelper-local-service-0.1.0.jar`；默认18081端口须空闲，不能与现有服务冲突。
+
+
+## 本阶段验证记录（2026-11-28）
+
+- 前端：npm test 98 项全部通过，npm run build 通过。
+- Java 全量：mvn -o -f backend-java/pom.xml package 成功，211 项中 206 项通过、5 项按条件跳过；默认不连接外部 MQTT Broker。
+- 最终定向复验：EarlyModbusCodecTest、MqttModbusHttpTest、MqttModbusIntegrationTest 在显式指定隔离 EMQX 后共 11 项全部通过，含新增断线/游标窗口与连接握手中停止清理测试。
+- 浏览器实测：连接 RUNNING，烟雾值 777 应用后版本 2，独立客户端查询得到 01 04 02 03 09 79 C6，界面收到 1、发布 1，停止恢复未连接。临时服务与 Broker 测试结束后关闭。
+- 认证拒绝、订阅拒绝、发布超时及不同 Broker 实例未做真实故障注入；目标虚拟机监测软件的解析、在线及报警验收未执行。协议 ASCII 和线圈示例矛盾保留待现场确认。
+
+日志位于工程 .runtime/mqtt-frontend-tests.log、mqtt-frontend-build.log、mqtt-java-all.log、mqtt-integration.log 和 mqtt-package.log。

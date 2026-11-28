@@ -24,6 +24,6 @@ const visibleTools = computed(() => tools.filter((tool) => `${tool.name} ${tool.
       </template>
       <p v-if="!visibleTools.length" class="nav-empty">没有匹配的工具</p>
     </nav>
-    <footer class="sidebar-foot"><span>13 个工具</span><span>Vue 3</span></footer>
+    <footer class="sidebar-foot"><span>{{ tools.length }} 个工具</span><span>Vue 3</span></footer>
   </aside>
 </template>

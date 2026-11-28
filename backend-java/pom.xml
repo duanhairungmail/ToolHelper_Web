@@ -18,6 +18,11 @@
     <jserialcomm.version>2.11.4</jserialcomm.version>
   </properties>
   <dependencies>
+    <dependency>
+      <groupId>org.eclipse.paho</groupId>
+      <artifactId>org.eclipse.paho.client.mqttv3</artifactId>
+      <version>1.2.5</version>
+    </dependency>
     <!-- 仅使用SQL解析/排版，不启用连接池、监控或自动配置。 -->
     <dependency>
       <groupId>com.alibaba</groupId>

@@ -87,6 +87,7 @@ public class LocalRequestFilter extends OncePerRequestFilter {
                     : request.getRequestURI().equals("/api/v1/sql/generate") ? 256 * 1024
                     : Set.of("/api/v1/ping/targets/parse", "/api/v1/ping/tasks", "/api/v1/ping/export")
                     .contains(request.getRequestURI()) ? pingRequestBytes
+                    : request.getRequestURI().startsWith("/api/v1/mqtt-modbus/") ? 512 * 1024
                     : request.getRequestURI().startsWith("/api/v1/serial/session/") ? serialRequestBytes
                     : request.getRequestURI().equals("/api/v1/druid/scans") ? druidRequestBytes : 16 * 1024;
             if (request.getContentLengthLong() > limit) {
