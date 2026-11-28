@@ -11,6 +11,150 @@ function mount(draft = createEarlyModbusMqttDraft()) {
   return { state, unmount: () => app.unmount() }
 }
 
+test('电表绑定解除网关下全部设备关联并保留数据，两块表可共用或分别绑定网关', () => {
+  const vm = mount()
+  try {
+    const s = vm.state
+    const firstGateway = s.activeGateway.value
+    const device = s.activeDevice.value
+    device.inputRegisters[0] = 777
+    s.addDevice()
+    assert.equal(s.bindMeter('dc', firstGateway.key), true)
+    assert.equal(s.gatewayDevices.value.length, 0)
+    assert.equal(s.unboundDevices.value.length, 2)
+    assert.equal(device.inputRegisters[0], 777)
+    assert.equal(s.downTopic.value, 'firetopic/__meterTopicKey/down')
+    assert.equal(s.bindMeter('ac', firstGateway.key), true)
+    assert.equal(s.gatewayMeterCount(firstGateway.key), 2)
+    s.addDevice()
+    assert.equal(s.devices.value.length, 2)
+    s.bindDevice(device, firstGateway.key)
+    assert.equal(device.gatewayKey, '')
+    s.addGateway()
+    const secondGateway = s.activeGateway.value
+    assert.equal(s.bindMeter('ac', secondGateway.key), true)
+    assert.equal(s.gatewayMeterCount(firstGateway.key), 1)
+    assert.equal(s.gatewayMeterCount(secondGateway.key), 1)
+    assert.equal(s.unboundDevices.value.length, 3)
+    assert.equal(s.bindMeter('dc', 'missing-gateway'), false)
+    assert.equal(s.meterGatewayKeys.value.dc, firstGateway.key)
+  } finally { vm.unmount() }
+})
+
+test('解除最后一块电表后可重新绑定原设备，恢复自定义主题且保留地址冲突处理', () => {
+  const vm = mount()
+  try {
+    const s = vm.state
+    const gateway = s.activeGateway.value
+    gateway.upTopic = 'custom/up'
+    const device = s.activeDevice.value
+    s.bindMeter('dc', gateway.key)
+    s.bindMeter('ac', gateway.key)
+    s.bindMeter('dc', '')
+    s.bindDevice(device, gateway.key)
+    assert.equal(device.gatewayKey, '')
+    s.bindMeter('ac', '')
+    s.addDevice()
+    s.bindDevice(device, gateway.key)
+    assert.equal(device.gatewayKey, gateway.key)
+    assert.equal(device.address, 2)
+    assert.equal(s.deviceUpTopic.value, 'custom/up')
+    assert.equal(s.unboundDevices.value.length, 0)
+  } finally { vm.unmount() }
+})
+
+test('删除电表网关清理两块表关联；设备迁移排除电表网关，复制不复制电表绑定', () => {
+  const vm = mount()
+  try {
+    const s = vm.state
+    const first = s.activeGateway.value
+    s.bindMeter('dc', first.key)
+    s.bindMeter('ac', first.key)
+    s.addGateway(true)
+    assert.equal(s.gatewayMeterCount(s.activeGateway.value.key), 0)
+    assert.equal(s.gatewayDevices.value.length, 0)
+    s.addDevice()
+    const second = s.activeGateway.value
+    s.removeGateway(second)
+    assert.equal(s.gateways.value.length, 2, '仅剩电表网关时不应迁入探测器')
+    s.addGateway()
+    const third = s.activeGateway.value
+    s.removeGateway(second)
+    assert.equal(s.gateways.value.length, 2)
+    assert.equal(s.gatewayDeviceCount(first.key), 0)
+    assert.equal(s.gatewayDeviceCount(third.key), 2)
+    s.removeGateway(first)
+    assert.deepEqual(s.meterGatewayKeys.value, { dc: '', ac: '' })
+    assert.equal(s.unboundDevices.value.length, 1)
+  } finally { vm.unmount() }
+})
+
+test('存在运行会话时拒绝电表改绑与解除；电表绑定随工具草稿恢复', () => {
+  const draft = createEarlyModbusMqttDraft()
+  const vm = mount(draft)
+  const s = vm.state
+  s.bindMeter('dc', s.activeGateway.value.key)
+  s.runtimeSessions.value.push({ sessionId: 'running' })
+  assert.equal(s.bindMeter('dc', ''), false)
+  assert.equal(s.bindMeter('ac', s.activeGateway.value.key), false)
+  vm.unmount()
+  const returned = mount(draft)
+  try {
+    assert.equal(returned.state.gatewayMeterCount(s.activeGateway.value.key), 1)
+    assert.equal(returned.state.unboundDevices.value.length, 1)
+  } finally { returned.unmount() }
+})
+
+test('切换电表网关保留设备编辑与预览，展示其他网关设备且不改变实际路由', () => {
+  const vm = mount()
+  try {
+    const s = vm.state
+    const meterGateway = s.activeGateway.value
+    const detachedDevice = s.activeDevice.value
+    detachedDevice.inputRegisters[0] = 777
+    s.bindMeter('dc', meterGateway.key)
+    s.addGateway()
+    const deviceGateway = s.activeGateway.value
+    const otherDevice = s.activeDevice.value
+    s.selectGateway(meterGateway)
+    assert.equal(s.activeDevice.value.id, otherDevice.id)
+    assert.equal(s.visibleDevices.value.length, 2)
+    assert.equal(s.registerRows.value.length, 63)
+    assert.equal(s.deviceGateway.value.key, deviceGateway.key)
+    assert.equal(s.deviceDownTopic.value, `firetopic/${deviceGateway.gatewayId}/down`)
+    assert.equal(s.deviceUpTopic.value, `firetopic/${deviceGateway.gatewayId}/up`)
+    assert.equal(s.upTopic.value, 'firetopic/__meterTopicKey/up')
+    s.selectedDeviceId.value = detachedDevice.id
+    assert.equal(s.activeDevice.value.inputRegisters[0], 777)
+    assert.equal(s.deviceGateway.value, undefined)
+    assert.equal(s.deviceDownTopic.value, '')
+    assert.equal(s.deviceUpTopic.value, '')
+    assert.ok(s.queryFrame.value.startsWith('01 04 '))
+    assert.ok(s.responseFrame.value.includes('03 09'))
+    s.selectGateway(deviceGateway)
+    s.selectedDeviceId.value = detachedDevice.id
+    s.selectGateway(meterGateway)
+    assert.equal(s.activeDevice.value.id, detachedDevice.id)
+    assert.equal(detachedDevice.gatewayKey, '')
+    assert.equal(otherDevice.gatewayKey, deviceGateway.key)
+  } finally { vm.unmount() }
+})
+
+test('电表网关只有未绑定设备时切换仍自动选中设备草稿', () => {
+  const vm = mount()
+  try {
+    const s = vm.state
+    const gateway = s.activeGateway.value
+    const device = s.activeDevice.value
+    s.bindMeter('dc', gateway.key)
+    s.selectedDeviceId.value = undefined
+    s.selectGateway(gateway)
+    assert.equal(s.activeDevice.value.id, device.id)
+    assert.equal(s.registerRows.value.length, 63)
+    assert.ok(s.responseFrame.value.length > 0)
+  } finally { vm.unmount() }
+})
+
 test('设备只绑定一个网关，多台设备可绑定同一网关，路由随绑定和网关配置更新', () => {
   const vm = mount()
   try {
@@ -27,11 +171,15 @@ test('设备只绑定一个网关，多台设备可绑定同一网关，路由�
     assert.notEqual(first.address, existing.address)
     assert.equal(s.gatewayDevices.value.length, 2)
     assert.equal(s.deviceGateway.value.key, target.key)
+    assert.equal(s.deviceDownTopic.value, `firetopic/${target.gatewayId}/down`)
     assert.equal(s.deviceUpTopic.value, `firetopic/${target.gatewayId}/up`)
     target.gatewayId = 'site-gateway'
+    assert.equal(s.deviceDownTopic.value, 'firetopic/site-gateway/down')
     assert.equal(s.deviceUpTopic.value, 'firetopic/site-gateway/up')
     s.previewOnce()
     assert.ok(s.logs.value[0].message.includes('firetopic/site-gateway/up'))
+    target.downTopic = 'custom/query'
+    assert.equal(s.deviceDownTopic.value, 'custom/query')
     s.selectGateway(originalGateway)
     assert.equal(s.gatewayDevices.value.length, 0)
     assert.equal(s.activeDevice.value, undefined)

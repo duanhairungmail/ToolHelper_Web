@@ -794,3 +794,45 @@ POST/DELETE 失败时不自动重放；刷新后页面只查询活动任务，�
 - 认证拒绝、订阅拒绝、发布超时及不同 Broker 实例未做真实故障注入；目标虚拟机监测软件的解析、在线及报警验收未执行。协议 ASCII 和线圈示例矛盾保留待现场确认。
 
 日志位于工程 .runtime/mqtt-frontend-tests.log、mqtt-frontend-build.log、mqtt-java-all.log、mqtt-integration.log 和 mqtt-package.log。
+
+
+## 16. 模拟电表后端（2026-11-29）
+
+入口：MQTT 测试工具 → 极早期 Modbus 协议模拟 → 模拟电表（/tools/early-modbus-mqtt）。已支持 DJSU2108 直流表（固定从站 1）与 DDSU2108 单相交流表（固定从站 2）的 MQTT 查询应答，不新增依赖。
+
+先填写网关 Broker，为电表绑定网关，再点击连接。两表可共用一个网关或分绑两个网关；绑定电表自动解除该网关的探测器绑定并保留其草稿。修改数值后点击“应用当前网关电表数据”，更新绑定网关的全部电表运行快照，等待监测服务下一轮查询。顶部查看网关不改变应用目标。运行期间锁定增删网关、设备拓扑和绑定；停止全部网关后可编辑拓扑。
+
+模拟器 SUB 为 firetopic/__meterTopicKey/down，PUB 为 firetopic/__meterTopicKey/up；payload 是含 CRC 的 RTU 原始二进制，不是 HEX 文本或 Modbus TCP。仅支持 FC03，直流范围 0x0000–0x0010（17 字），交流 0x0000–0x000D（14 字）。同 Broker 两电表会话使用普通订阅，仅在从站地址互斥时允许共用固定主题；各会话过滤其他地址查询，filtered 与 dropped 分开统计。
+
+### 编码与接口
+
+当前显式采用 firesys-legacy-v1：适配已核对旧监测程序的 signed16(first) × 256 + signed16(second) 算法，不宣称为厂家标准 32 位字序。双寄存器原始整数范围 -8388608..8388607，仅交流组合总电能、有功功率及功率因数允许负值；直流非负。倍率、字段及单寄存器上限由 MeterProfile 校验。
+
+测量值通过 measurements 的十进制字符串传输，JSON 数字、科学计数法、超精度及溢出拒绝，不做静默取整。直流 baudRateRaw 必填 0–65535，默认 0 是未确认枚举的占位，不标注为 9600；交流不接受该字段，0x000D 固定补零，不开放远端通信参数寄存器 0x01FB/0x0226。
+
+继续使用 /api/v1/mqtt-modbus：
+
+- capabilities.meter 声明 types、encodingProfile、downTopic/upTopic、functions、addresses、readRanges、maxPerGateway；旧后端不声明时前端禁用电表连接并提示升级。
+- 创建会话增加 kind: meter 和 meters（devices 为空）；旧请求缺省 kind 仍为 early。每块 Meter 含 id/gatewayKey/type/address/encodingProfile/baudRateRaw/measurements。
+- profile 提交 expectedVersion + meters，校验完整快照后原子替换并增加版本；禁止运行时改变 ID、类型、绑定或地址。
+- 会话返回 kind/meters/filtered，原连接、停止、事件、心跳和 60 秒租约机制复用。每网关一客户端，最多 8 个会话，有界队列 64、事件 200。
+- 前端共享草稿，切换工具保留；刷新从仍活动快照恢复两表绑定与已应用值，不恢复未应用修改。轮询不覆盖草稿；电表固定运行主题不覆盖原探测器自定义主题。
+
+### 本轮验证
+
+前端 npm test 111 项全部通过，生产构建通过。Java 全量 package 为 219 项、0 失败、0 错误、10 项条件跳过（其中 8 项需显式 Broker）；另对 tcp://127.0.0.1:21883 的隔离 EMQX 执行电表/极早期协议、HTTP 和集成测试 17 项全部通过。最终前端调整后重新 build，并以 -DskipTests package 成功打包，无新增 Java 改动。
+
+已连接用户 VM 192.168.31.126:1883，核对实际运行 JAR 的三个关键 class 哈希与离线包一致。通过其真实查询、spring.log 的保存成功记录及 GET /index/getMeterLastData 验证：
+
+| 数据 | 直流 | 交流 |
+| --- | --- | --- |
+| 电压/电流/功率 | 350 V / 10 A / 3.5 kW | 220 V / 5 A / -1.045 kW |
+| 总电能 | 1250 kWh | 1250 kWh |
+| 分项电能 | 尖100/峰350/平500/谷300 kWh | 正向1200/反向50 kWh |
+| 功率因数/频率 | 不适用 | 0.95 / 50 Hz |
+
+页面验证一网关双表及同 Broker 分绑各一表；分绑后只应答自身地址，无重复发布。停止直流后交流继续响应（接口时间分别为 00:49:00/00:50:00），刷新恢复、负功率应用及越界拒绝通过，控制台无错误。未目视验收原生监测界面、逐项变化或告警；不同 Broker 实例路由及认证/订阅拒绝、发布超时真实故障注入未执行。
+
+测试未直接修改 VM 配置/程序/数据库，模拟测量由监测服务原有流程保存。测试会话和临时 18085 Java/21883 Broker 已停止，原 18081 Java/5173 Vite 保留。请重启常用 Java 后端以加载新增能力；最终包为 backend-java/target/toolhelper-local-service-0.1.0.jar，前端静态资源已打入其中。
+
+日志：.runtime/meter-frontend-tests-final.log、meter-build-final.log、meter-package.log、meter-integration.log、meter-package-final.log。详细实施与协议限制见 D:/DevlopProject/Knowledge_Base/ToolHelper_Web_Base/模拟电表-后端实施方案.md。

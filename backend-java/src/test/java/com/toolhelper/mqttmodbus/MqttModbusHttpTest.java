@@ -30,6 +30,12 @@ class MqttModbusHttpTest {
             var caps=send(client,base,token,"/capabilities","GET",null);
             assertEquals(200,caps.statusCode()); assertEquals(8,json.readTree(caps.body()).path("data").path("maxSessions").asInt());
             assertFalse(json.readTree(caps.body()).path("requestId").asText().isBlank());
+            assertEquals(MeterProfile.ENCODING,json.readTree(caps.body()).path("data").path("meter").path("encodingProfile").asText());
+            String meterBody=json.writeValueAsString(MeterMqttIntegrationTest.request("tcp://127.0.0.1:1","meter-http",List.of(MeterModbusCodecTest.meter("meter-http","dc"))));
+            assertEquals(400,send(client,base,token,"/sessions","POST",meterBody.replace("\"350.0\"","350.0")).statusCode());
+            assertEquals(400,send(client,base,token,"/sessions","POST",meterBody.replace("firesys-legacy-v1","unknown")).statusCode());
+            assertEquals(400,send(client,base,token,"/sessions","POST",meterBody.replace("\"address\":1","\"address\":2")).statusCode());
+            assertEquals(400,send(client,base,token,"/sessions","POST",meterBody.replace("/down","/wrong")).statusCode());
             var gateway=new Gateway("g","g","g","tcp://127.0.0.1:1",null,0,null,null);
             String body=json.writeValueAsString(new OpenRequest(gateway,List.of(device("g","d",1,120)),null,null));
             assertEquals(400,send(client,base,token,"/sessions","POST",body.replace("\"address\":1","\"address\":1.5")).statusCode());
@@ -51,6 +57,16 @@ class MqttModbusHttpTest {
                 assertEquals(200,send(client,base,token,"/sessions/"+id+"/heartbeat","POST","{}").statusCode());
                 assertEquals(200,send(client,base,token,"/sessions/"+id+"/events?after=0","GET",null).statusCode());
                 assertEquals(200,send(client,base,token,"/sessions/"+id,"DELETE",null).statusCode());
+                var meterOpened=send(client,base,token,"/sessions","POST",meterBody.replace("tcp://127.0.0.1:1",broker));
+                assertEquals(200,meterOpened.statusCode(),meterOpened.body());
+                var meterSession=json.readTree(meterOpened.body()).path("data");
+                assertEquals("meter",meterSession.path("kind").asText());
+                assertEquals(1,meterSession.path("meters").size());
+                String meterId=meterSession.path("sessionId").asText();
+                var meterChange=new ProfileRequest(1L,null,List.of(MeterModbusCodecTest.change(MeterModbusCodecTest.meter("meter-http","dc"),"voltage","351.2")));
+                assertEquals(200,send(client,base,token,"/sessions/"+meterId+"/profile","POST",json.writeValueAsString(meterChange)).statusCode());
+                assertEquals(409,send(client,base,token,"/sessions/"+meterId+"/profile","POST",json.writeValueAsString(meterChange)).statusCode());
+                assertEquals(200,send(client,base,token,"/sessions/"+meterId,"DELETE",null).statusCode());
             }
         } finally {
             // Spring 的全局日志 appender 比 Context 寿命长；先释放测试目录文件句柄。

@@ -11,7 +11,8 @@ import org.springframework.web.bind.annotation.*;
 public class MqttModbusController {
     private final MqttModbusService service;
     public MqttModbusController(MqttModbusService service) { this.service=service; }
-    @GetMapping("/capabilities") public Object capabilities(HttpServletRequest r) { return response(r,Map.of("protocol","MQTT 3.1.1 / RTU binary", "transports",List.of("tcp","mqtt"),"functions",List.of(1,3,4),"maxSessions",8,"maxDevicesPerGateway",247,"leaseMs",60000,"maxEvents",200,"maxFrameBytes",256)); }
+    @GetMapping("/capabilities") public Object capabilities(HttpServletRequest r) { return response(r,Map.of("protocol","MQTT 3.1.1 / RTU binary", "transports",List.of("tcp","mqtt"),"functions",List.of(1,3,4),"maxSessions",8,"maxDevicesPerGateway",247,"leaseMs",60000,"maxEvents",200,"maxFrameBytes",256,
+        "meter",Map.of("types",List.of("dc","ac"),"encodingProfile",MeterProfile.ENCODING,"downTopic",MeterProfile.DOWN,"upTopic",MeterProfile.UP,"functions",List.of(3),"addresses",Map.of("dc",1,"ac",2),"readRanges",Map.of("dc",List.of(0,16),"ac",List.of(0,13)),"maxPerGateway",2))); }
     @GetMapping("/sessions") public Object list(HttpServletRequest r) { return response(r,service.list()); }
     @PostMapping("/sessions") public Object open(@RequestBody OpenRequest body,HttpServletRequest r) { return response(r,service.open(body)); }
     @GetMapping("/sessions/{id}") public Object state(@PathVariable String id,HttpServletRequest r) { return response(r,service.state(id)); }

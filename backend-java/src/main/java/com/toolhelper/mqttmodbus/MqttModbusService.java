@@ -27,12 +27,15 @@ public class MqttModbusService {
         final AtomicLong received=new AtomicLong(),published=new AtomicLong(),dropped=new AtomicLong();
         final Deque<Event> events=new ArrayDeque<>();
         volatile List<Device> devices; long version=1, cursor; volatile long expires;
+        final String kind;
+        volatile List<MeterProfile.Snapshot> meters;
+        final AtomicLong filtered=new AtomicLong();
         volatile String state="CONNECTING", error=""; volatile MqttClientAdapter client;
-        Context(Gateway gateway,List<Device> devices,long now) {
-            this.gateway=gateway; this.devices=devices; this.expires=now+LEASE_MS;
+        Context(Gateway gateway,List<Device> devices,String kind,List<MeterProfile.Snapshot> meters,long now) {
+            this.gateway=gateway; this.devices=devices; this.kind=kind; this.meters=meters; this.expires=now+LEASE_MS;
             worker=new ThreadPoolExecutor(1,1,0,TimeUnit.MILLISECONDS,new ArrayBlockingQueue<>(QUEUE_SIZE),r -> { var t=new Thread(r,"mqtt-modbus-"+id); t.setDaemon(true); return t; },new ThreadPoolExecutor.AbortPolicy());
         }
-        synchronized Session snapshot() { return new Session(id,gateway,state,version,devices,received.get(),published.get(),dropped.get(),expires,error); }
+        synchronized Session snapshot() { return new Session(id,gateway,state,version,devices,received.get(),published.get(),dropped.get(),expires,error,kind,meters.stream().map(MeterProfile.Snapshot::meter).toList(),filtered.get()); }
         synchronized void event(String kind,String topic,String device,byte[] bytes,String result,long configVersion) {
             String crcStatus=bytes==null ? "NOT_CHECKED" : result.equals("INVALID_CRC") ? "INVALID" : result.equals("INVALID_LENGTH") ? "NOT_CHECKED" : "VALID";
             events.addLast(new Event(++cursor,System.currentTimeMillis(),gateway.key(),kind,topic,device,
@@ -44,20 +47,33 @@ public class MqttModbusService {
     public Session open(OpenRequest request) {
         EarlyDeviceProfile.require(request != null,"缺少请求");
         Gateway g=EarlyDeviceProfile.gateway(request.gateway());
-        List<Device> devices=EarlyDeviceProfile.devices(g.key(),request.devices());
+        String kind=request.kind()==null?"early":request.kind();
+        EarlyDeviceProfile.require(Set.of("early","meter").contains(kind),"会话类型无效");
+        boolean meter=kind.equals("meter");
+        EarlyDeviceProfile.require(meter ? request.devices()==null || request.devices().isEmpty() : request.meters()==null || request.meters().isEmpty(),"电表与极早期设备不能混用");
+        List<Device> devices=meter?List.of():EarlyDeviceProfile.devices(g.key(),request.devices());
+        List<MeterProfile.Snapshot> meters=meter?MeterProfile.meters(g.key(),request.meters()):List.of();
+        EarlyDeviceProfile.require(!meter || (MeterProfile.DOWN.equals(g.downTopic()) && MeterProfile.UP.equals(g.upTopic())),"电表必须使用固定主题");
         EarlyDeviceProfile.require(request.username()==null || request.username().length()<=256,"用户名过长");
         EarlyDeviceProfile.require(request.password()==null || request.password().length()<=1024,"密码过长");
         EarlyDeviceProfile.require(request.password()==null || request.password().isEmpty() || (request.username()!=null && !request.username().isBlank()),"使用密码时需填写用户名");
-        Context c=new Context(g,devices,clock.getAsLong());
+        Context c=new Context(g,devices,kind,meters,clock.getAsLong());
         synchronized(this) {
             if(destroyed) throw new ApiException(503,"MQTT_SERVICE_STOPPED","服务正在关闭");
             if(sessions.size()>=MAX_SESSIONS) throw new ApiException(409,"MQTT_SESSION_LIMIT","最多同时运行 8 个网关");
             for(Context old:sessions.values()) {
                 if(old.gateway.key().equals(g.key())) conflict("该网关已有会话，请先停止");
-                if(old.gateway.brokerUrl().equals(g.brokerUrl()) && (old.gateway.clientId().equals(g.clientId())
-                    || old.gateway.downTopic().equals(g.downTopic()) || old.gateway.upTopic().equals(g.upTopic()) || old.gateway.upTopic().equals(g.downTopic()) || old.gateway.downTopic().equals(g.upTopic()))) conflict("同 Broker 的 Client ID 或收发主题存在冲突");
+                if(old.gateway.brokerUrl().equals(g.brokerUrl())) {
+                    if(old.gateway.clientId().equals(g.clientId())) conflict("同 Broker 的 Client ID 重复");
+                    boolean sharedMeters=meter && old.kind.equals("meter") && old.gateway.downTopic().equals(g.downTopic()) && old.gateway.upTopic().equals(g.upTopic());
+                    if(sharedMeters) {
+                        if(meters.stream().anyMatch(m->old.meters.stream().anyMatch(o->o.meter().address().equals(m.meter().address())))) conflict("同 Broker 电表从站地址重复");
+                    } else if(old.gateway.downTopic().equals(g.downTopic()) || old.gateway.upTopic().equals(g.upTopic()) || old.gateway.upTopic().equals(g.downTopic()) || old.gateway.downTopic().equals(g.upTopic())) conflict("同 Broker 收发主题存在冲突");
+                }
                 Set<String> ids=new HashSet<>(old.devices.stream().map(Device::id).toList());
                 if(devices.stream().anyMatch(d->ids.contains(d.id()))) conflict("设备已在其他网关会话运行");
+                Set<String> allIds=new HashSet<>(ids); old.meters.forEach(m->allIds.add(m.meter().id()));
+                if(meters.stream().anyMatch(m->allIds.contains(m.meter().id())) || devices.stream().anyMatch(d->old.meters.stream().anyMatch(m->m.meter().id().equals(d.id())))) conflict("电表或设备 ID 已在其他会话运行");
             }
             sessions.put(c.id,c);
         }
@@ -84,14 +100,14 @@ public class MqttModbusService {
         catch(RejectedExecutionException e) { c.dropped.incrementAndGet(); c.event("丢弃",c.gateway.downTopic(),"",null,"QUEUE_FULL_OR_STOPPED",c.snapshot().version()); }
     }
     private void process(Context c,byte[] bytes) {
-        List<Device> devices; long version;
+        List<Device> devices; List<MeterProfile.Snapshot> meters; long version;
         synchronized(c) {
             if(!Set.of("RUNNING","CONNECTING").contains(c.state)) return;
-            devices=c.devices; version=c.version;
+            devices=c.devices; meters=c.meters; version=c.version;
         }
-        var result=EarlyModbusCodec.respond(bytes,devices);
+        var result=c.kind.equals("meter")?MeterModbusCodec.respond(bytes,meters):EarlyModbusCodec.respond(bytes,devices);
         c.event("接收",c.gateway.downTopic(),result.deviceId(),bytes,result.result(),version);
-        if(result.response()==null) { c.dropped.incrementAndGet(); return; }
+        if(result.response()==null) { if(result.result().equals("FILTERED_SLAVE")) c.filtered.incrementAndGet(); else c.dropped.incrementAndGet(); return; }
         try {
             // 每个查询只发布一次；不在结果不明时重试，停止会话会关闭连接并打断队列。
             if(!Set.of("RUNNING","CONNECTING").contains(c.state)) return;
@@ -119,13 +135,18 @@ public class MqttModbusService {
     public Session profile(String id,ProfileRequest body) {
         Context c=require(id);
         EarlyDeviceProfile.require(body!=null && body.expectedVersion()!=null,"缺少配置版本");
-        List<Device> next=EarlyDeviceProfile.devices(c.gateway.key(),body.devices());
+        boolean meter=c.kind.equals("meter");
+        EarlyDeviceProfile.require(meter ? body.devices()==null || body.devices().isEmpty() : body.meters()==null || body.meters().isEmpty(),"不能更改会话类型");
+        List<Device> next=meter?List.of():EarlyDeviceProfile.devices(c.gateway.key(),body.devices());
+        List<MeterProfile.Snapshot> nextMeters=meter?MeterProfile.meters(c.gateway.key(),body.meters()):List.of();
         synchronized(c) {
             if(!c.state.equals("RUNNING")) conflict("当前会话未运行");
             if(body.expectedVersion()!=c.version) conflict("配置版本已变化，请刷新状态后重试");
             Map<String,Integer> topology=new HashMap<>(); c.devices.forEach(d->topology.put(d.id(),d.address()));
             if(next.size()!=c.devices.size() || next.stream().anyMatch(d->!Objects.equals(topology.get(d.id()),d.address()))) conflict("运行中不能修改设备绑定或地址，请先停止网关");
-            c.devices=next; c.version++; c.event("配置","","",null,"PROFILE_UPDATED",c.version);
+            Set<String> meterTopology=new HashSet<>(); c.meters.forEach(m->meterTopology.add(m.meter().id()+"/"+m.meter().type()+"/"+m.meter().address()));
+            if(nextMeters.size()!=c.meters.size() || nextMeters.stream().anyMatch(m->!meterTopology.contains(m.meter().id()+"/"+m.meter().type()+"/"+m.meter().address()))) conflict("运行中不能修改电表绑定或类型");
+            c.devices=next; c.meters=nextMeters; c.version++; c.event("配置","","",null,"PROFILE_UPDATED",c.version);
             return c.snapshot();
         }
     }

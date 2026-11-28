@@ -1,4 +1,5 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { createMeterDrafts } from '../utils/simulatedMeter.js'
 import { rtuFrameHex } from '../utils/earlyModbusFrame.js'
 
 function createDevice(number, source, gatewayKey) {
@@ -13,7 +14,7 @@ function createDevice(number, source, gatewayKey) {
   return {
     id,
     gatewayKey,
-    name: source ? `${source.name} 副本` : `火灾探测器 ${String(number).padStart(3, '0')}`,
+    name: source ? `${source.name} 副本` : `${number}#极早期`,
     modelId: source ? `${source.modelId}-copy` : `FD-${String(number).padStart(3, '0')}`,
     serialNumber: source ? source.serialNumber : `FD-${String(number).padStart(3, '0')}`,
     hardwareVersion: source ? source.hardwareVersion : 'F2J1D4B3A12.16',
@@ -43,6 +44,7 @@ export function createEarlyModbusMqttDraft() {
   return {
     selectedTemplate: ref('normal'), dataTab: ref('input'), gateways: ref([gateway]),
     selectedGatewayKey: ref(gateway.key), devices: ref([device]), selectedDeviceId: ref(device.id),
+    meterGatewayKeys: ref({ dc: '', ac: '' }), meters: ref(createMeterDrafts()),
     previewCount: ref(0), lastPreview: ref('尚未预览'), runtimeSessions: ref([]),
     logs: ref([{ time: now(), kind: '系统', message: '本地预览已就绪；真实收发请连接 MQTT 网关。' }])
   }
@@ -50,7 +52,7 @@ export function createEarlyModbusMqttDraft() {
 const sharedDraft = createEarlyModbusMqttDraft()
 
 export function useEarlyModbusMqtt(draft = sharedDraft) {
-  const { selectedTemplate, dataTab, gateways, selectedGatewayKey, devices, selectedDeviceId, previewCount, lastPreview, logs, runtimeSessions } = draft
+  const { selectedTemplate, dataTab, gateways, selectedGatewayKey, devices, selectedDeviceId, meterGatewayKeys, meters, previewCount, lastPreview, logs, runtimeSessions } = draft
   const inputRegisterNames = [
     '烟雾实时曲线值', '故障类型位图', '报警级别', '设备工作状态',
     '当前阈值：火警 2', '当前阈值：火警 1', '当前阈值：巡警', '当前阈值：预警', '当前阈值：示警',
@@ -72,9 +74,14 @@ export function useEarlyModbusMqtt(draft = sharedDraft) {
   const templates = { normal: '正常运行', alarm: '火警触发', fault: '设备故障' }
   const activeGateway = computed(() => gateways.value.find((gateway) => gateway.key === selectedGatewayKey.value) || gateways.value[0])
   const gatewayDevices = computed(() => devices.value.filter((device) => device.gatewayKey === selectedGatewayKey.value))
-  const activeDevice = computed(() => gatewayDevices.value.find((device) => device.id === selectedDeviceId.value) || gatewayDevices.value[0])
+  const unboundDevices = computed(() => devices.value.filter((device) => !device.gatewayKey))
+  // 电表网关不筛掉探测器草稿；查看设备与设备实际 MQTT 归属独立。
+  const visibleDevices = computed(() => gatewayMeterCount(selectedGatewayKey.value)
+    ? devices.value : [...gatewayDevices.value, ...unboundDevices.value])
+  const activeDevice = computed(() => visibleDevices.value.find((device) => device.id === selectedDeviceId.value) || visibleDevices.value[0])
   // 通过设备的唯一绑定解析发送目标，切换界面不会改变设备的归属。
   const deviceGateway = computed(() => gateways.value.find((gateway) => gateway.key === activeDevice.value?.gatewayKey))
+  const deviceDownTopic = computed(() => deviceGateway.value ? (deviceGateway.value.downTopic || `firetopic/${deviceGateway.value.gatewayId || '{gatewayId}'}/down`) : '')
   const deviceUpTopic = computed(() => deviceGateway.value ? (deviceGateway.value.upTopic || `firetopic/${deviceGateway.value.gatewayId || '{gatewayId}'}/up`) : '')
   const registerRows = computed(() => {
     if (!activeDevice.value) return []
@@ -100,8 +107,25 @@ export function useEarlyModbusMqtt(draft = sharedDraft) {
   const running = ref(false)
   let timer, disposed = false
 
-  const downTopic = computed(() => activeGateway.value.downTopic || `firetopic/${gatewayId.value || '{gatewayId}'}/down`)
-  const upTopic = computed(() => activeGateway.value.upTopic || `firetopic/${gatewayId.value || '{gatewayId}'}/up`)
+  const downTopic = computed(() => gatewayMeterCount(selectedGatewayKey.value) ? 'firetopic/__meterTopicKey/down' : activeGateway.value.downTopic || `firetopic/${gatewayId.value || '{gatewayId}'}/down`)
+  const upTopic = computed(() => gatewayMeterCount(selectedGatewayKey.value) ? 'firetopic/__meterTopicKey/up' : activeGateway.value.upTopic || `firetopic/${gatewayId.value || '{gatewayId}'}/up`)
+
+  function gatewayMeterCount(gatewayKey) {
+    return Object.values(meterGatewayKeys.value).filter((key) => key && key === gatewayKey).length
+  }
+
+  // 电表与探测器互斥。只解除设备关联，不删除设备或修改测量数据。
+  function bindMeter(type, targetGatewayKey) {
+    if (!Object.hasOwn(meterGatewayKeys.value, type) || runtimeSessions.value.length) return false
+    if (targetGatewayKey && !gateways.value.some((gateway) => gateway.key === targetGatewayKey)) return false
+    if (meterGatewayKeys.value[type] === targetGatewayKey) return true
+    const gateway = gateways.value.find((item) => item.key === targetGatewayKey)
+    const detached = devices.value.filter((device) => targetGatewayKey && device.gatewayKey === targetGatewayKey)
+    detached.forEach((device) => { device.gatewayKey = '' })
+    meterGatewayKeys.value[type] = targetGatewayKey
+    addLog('电表', `${type === 'dc' ? '直流电表' : '单相交流电表'}${gateway ? `已绑定 ${gateway.name}` : '已解除网关绑定'}${detached.length ? `；${detached.length} 台极早期设备已解除绑定，数据保留在未绑定列表` : ''}。`)
+    return true
+  }
 
   function updateVersion(device, field, startAddress, count, value) {
     const sanitized = [...value].slice(0, count).map((char) => char.charCodeAt(0) <= 0x7f ? char : '?').join('')
@@ -189,6 +213,7 @@ export function useEarlyModbusMqtt(draft = sharedDraft) {
   }
 
   function addDevice(copy = false) {
+    if (gatewayMeterCount(selectedGatewayKey.value)) return
     if (gatewayDevices.value.length >= 247) return
     const device = createDevice(gatewayDevices.value.length + 1, copy ? activeDevice.value : undefined, selectedGatewayKey.value)
     device.address = nextAddress()
@@ -207,7 +232,7 @@ export function useEarlyModbusMqtt(draft = sharedDraft) {
 
   function updateAddress(device, value) {
     const address = Number(value)
-    if (!Number.isInteger(address) || address < 1 || address > 247 || gatewayDevices.value.some((item) => item.id !== device.id && Number(item.address) === address)) {
+    if (!Number.isInteger(address) || address < 1 || address > 247 || (device.gatewayKey && devices.value.some((item) => item.gatewayKey === device.gatewayKey && item.id !== device.id && Number(item.address) === address))) {
       addLog('设备', `地址 ${value} 无效或已被占用；从站地址需唯一且在 1–247 范围内。`)
       return
     }
@@ -220,6 +245,10 @@ export function useEarlyModbusMqtt(draft = sharedDraft) {
 
   function bindDevice(device, targetGatewayKey) {
     if (!device || !gateways.value.some((gateway) => gateway.key === targetGatewayKey)) return
+    if (gatewayMeterCount(targetGatewayKey)) {
+      addLog('设备', '该网关已绑定电表，请先解除其全部电表绑定，再绑定极早期设备。')
+      return
+    }
     if (device.gatewayKey === targetGatewayKey) return
     const sourceGateway = gateways.value.find((gateway) => gateway.key === device.gatewayKey)
     const targetGateway = gateways.value.find((gateway) => gateway.key === targetGatewayKey)
@@ -254,6 +283,7 @@ export function useEarlyModbusMqtt(draft = sharedDraft) {
       ? { ...source, key: `gateway-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`, name: `${source.name} 副本`, gatewayId: uniqueGatewayId(source.gatewayId, true), clientId: '', downTopic: '', upTopic: '' }
       : { key: `gateway-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`, name: `网关 ${number}`, gatewayId: uniqueGatewayId(`gateway-${String(number).padStart(3, '0')}`), brokerUrl: '', qos: '0', interval: '2000' }
     gateways.value.push(gateway)
+    const copyingMeterGateway = copy && gatewayMeterCount(source.key) > 0
     const sourceDevices = copy ? gatewayDevices.value : []
     if (sourceDevices.length) {
       sourceDevices.forEach((device) => {
@@ -261,30 +291,34 @@ export function useEarlyModbusMqtt(draft = sharedDraft) {
         duplicate.address = device.address
         devices.value.push(duplicate)
       })
-    } else {
+    } else if (!copyingMeterGateway) {
       devices.value.push(createDevice(1, undefined, gateway.key))
     }
     selectedGatewayKey.value = gateway.key
-    selectedDeviceId.value = gatewayDevices.value[0].id
+    selectedDeviceId.value = gatewayDevices.value[0]?.id
     addLog('网关', `已${copy ? '复制' : '添加'}${gateway.name}，包含 ${gatewayDevices.value.length} 台设备。`)
   }
 
   function removeGateway(gateway) {
-    if (gateways.value.length <= 1) return
+    if (gateways.value.length <= 1 || runtimeSessions.value.length) return
     const remaining = gateways.value.filter((item) => item.key !== gateway.key)
+    const deviceDestinations = remaining.filter((item) => !gatewayMeterCount(item.key))
     const destination = remaining[0]
     const movingDevices = devices.value.filter((device) => device.gatewayKey === gateway.key)
-    const availableCapacity = remaining.reduce((total, item) => total + Math.max(0, 247 - devices.value.filter((device) => device.gatewayKey === item.key).length), 0)
+    const availableCapacity = deviceDestinations.reduce((total, item) => total + Math.max(0, 247 - gatewayDeviceCount(item.key)), 0)
     if (movingDevices.length > availableCapacity) {
       addLog('网关', `无法删除${gateway.name}：其他网关没有足够的从站地址容纳其 ${movingDevices.length} 台设备。`)
       return
     }
     movingDevices.forEach((device) => {
-      const target = remaining.find((item) => devices.value.filter((candidate) => candidate.gatewayKey === item.key).length < 247)
+      const target = deviceDestinations.find((item) => gatewayDeviceCount(item.key) < 247)
       const occupied = new Set(devices.value.filter((item) => item.gatewayKey === target.key && item.id !== device.id).map((item) => Number(item.address)))
       device.gatewayKey = target.key
       if (occupied.has(Number(device.address))) device.address = [...Array(247)].map((_, index) => index + 1).find((address) => !occupied.has(address))
     })
+    for (const type of Object.keys(meterGatewayKeys.value)) {
+      if (meterGatewayKeys.value[type] === gateway.key) meterGatewayKeys.value[type] = ''
+    }
     gateways.value = remaining
     if (selectedGatewayKey.value === gateway.key) {
       selectedGatewayKey.value = destination.key
@@ -296,7 +330,7 @@ export function useEarlyModbusMqtt(draft = sharedDraft) {
 
   function selectGateway(gateway) {
     selectedGatewayKey.value = gateway.key
-    selectedDeviceId.value = gatewayDevices.value[0]?.id
+    if (!gatewayMeterCount(gateway.key)) selectedDeviceId.value = gatewayDevices.value[0]?.id
   }
 
   function setTemplate(key) {
@@ -354,7 +388,8 @@ export function useEarlyModbusMqtt(draft = sharedDraft) {
   })
 
   return { templates, selectedTemplate, dataTab, gateways, selectedGatewayKey, activeGateway,
-    devices, gatewayDevices, selectedDeviceId, activeDevice, deviceGateway, deviceUpTopic, registerRows,
+    devices, gatewayDevices, unboundDevices, visibleDevices, selectedDeviceId, activeDevice, deviceGateway, deviceDownTopic, deviceUpTopic, registerRows,
+    meterGatewayKeys, meters, gatewayMeterCount, bindMeter,
     faultOptions, deviceAlarm, deviceSeverityClass, faultSummary, temperature, responsePreview, addressHex, queryFrame, responseFrame,
     gatewayId, brokerUrl, qos, interval, running, previewCount, lastPreview, logs, downTopic, upTopic,
     updateVersion, updateFault, isFaultSelected, numberRange, asciiChar, isAsciiAddress, fieldOptions,

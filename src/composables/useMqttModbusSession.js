@@ -1,9 +1,11 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { meterPayload, METER_DOWN, METER_UP } from '../utils/simulatedMeter.js'
 import { mqttModbusApi } from '../api/mqttModbus.js'
 
 export function useMqttModbusSession(editor, api = mqttModbusApi) {
   const sessions = editor.runtimeSessions, busy = ref(false), error = ref(''), ready = ref(false)
-  const username = ref(''), password = ref('')
+  const username = ref(''), password = ref(''), meterSupported = ref(false)
+  let capabilitiesLoaded = false
   watch(editor.selectedGatewayKey, () => { username.value = ''; password.value = '' }, { flush: 'sync' })
   const cursors = new Map()
   const hydrated = new Set(sessions.value.map(s => s.sessionId))
@@ -16,14 +18,40 @@ export function useMqttModbusSession(editor, api = mqttModbusApi) {
     editor.logs.value = editor.logs.value.slice(0, 30)
   }
   function restore(session) {
+    // 电表固定主题属于运行路由，不覆盖网关原有的探测器主题草稿。
+    const restoredGateway = { ...session.gateway, qos: String(session.gateway.qos) }
+    if (session.kind === 'meter') { delete restoredGateway.downTopic; delete restoredGateway.upTopic }
     let gateway = editor.gateways.value.find(g => g.key === session.gateway.key)
     if (!gateway) {
-      gateway = { ...session.gateway, interval: '2000', qos: String(session.gateway.qos) }
+      gateway = { downTopic: '', upTopic: '', ...restoredGateway, interval: '2000' }
       editor.gateways.value.push(gateway)
     } else if (!hydrated.has(session.sessionId)) {
-      Object.assign(gateway, session.gateway, { qos: String(session.gateway.qos) })
+      Object.assign(gateway, restoredGateway)
     }
     if (hydrated.has(session.sessionId)) return
+    if (session.kind === 'meter') {
+      // 服务端运行快照是恢复依据；仅首次恢复，后续轮询不得覆盖未应用草稿。
+      editor.devices.value.filter(d => d.gatewayKey === session.gateway.key).forEach(d => { d.gatewayKey = '' })
+      for (const type of Object.keys(editor.meterGatewayKeys.value)) {
+        if (editor.meterGatewayKeys.value[type] === session.gateway.key) editor.meterGatewayKeys.value[type] = ''
+      }
+      for (const meter of session.meters) {
+        const draft = editor.meters.value[meter.type]
+        draft.id = meter.id; draft.encodingProfile = meter.encodingProfile
+        if (meter.type === 'dc') draft.baudRateRaw = String(meter.baudRateRaw)
+        for (const field of draft.fields) field.value = meter.measurements[field.key]
+        editor.meterGatewayKeys.value[meter.type] = session.gateway.key
+      }
+      hydrated.add(session.sessionId)
+      return
+    }
+    // 服务端已有探测器会话时以实际运行状态为准，清除与之冲突的本地电表绑定。
+    for (const type of Object.keys(editor.meterGatewayKeys.value)) {
+      if (editor.meterGatewayKeys.value[type] === session.gateway.key) {
+        editor.meterGatewayKeys.value[type] = ''
+        log('电表', `${gateway.name} 已恢复运行中的极早期设备会话，已解除本地电表绑定。`)
+      }
+    }
     // 刷新页面后恢复运行快照时，替换该网关的默认设备，避免出现重复地址。
     editor.devices.value = editor.devices.value.filter(d => d.gatewayKey !== session.gateway.key)
     for (const device of session.devices) {
@@ -37,6 +65,11 @@ export function useMqttModbusSession(editor, api = mqttModbusApi) {
   }
   async function readState() {
     try {
+      if (!capabilitiesLoaded) {
+        const capabilities = api.capabilities ? await api.capabilities() : {}
+        meterSupported.value = capabilities.meter?.encodingProfile === 'firesys-legacy-v1'
+        capabilitiesLoaded = true
+      }
       const list = await api.list()
       if (disposed) return
       list.forEach(restore)
@@ -67,6 +100,24 @@ export function useMqttModbusSession(editor, api = mqttModbusApi) {
     id: d.id, gatewayKey: d.gatewayKey, name: d.name, modelId: d.modelId, address: Number(d.address),
     inputRegisters: [...d.inputRegisters], holdingRegisters: [...d.holdingRegisters], coils: [...d.coils]
   }))
+  const meterPayloads = key => Object.entries(editor.meterGatewayKeys.value)
+    .filter(([, gatewayKey]) => gatewayKey === key)
+    .map(([type]) => meterPayload(type, editor.meters.value[type], key))
+  function meterDirty(key) {
+    const session = sessions.value.find(s => s.gateway.key === key && s.kind === 'meter')
+    if (!session) return false
+    try {
+      const drafts = meterPayloads(key)
+      return drafts.some(m => {
+        const applied = session.meters.find(a => a.id === m.id)
+        return !applied || m.baudRateRaw !== (applied.baudRateRaw ?? undefined) ||
+          Object.entries(m.measurements).some(([field, value]) => value !== applied.measurements[field])
+      })
+    } catch {
+      // 非法草稿也属于未应用修改；具体字段错误由预览和提交校验展示。
+      return true
+    }
+  }
   async function mutate(operation) {
     if (busy.value || disposed) return
     busy.value = true
@@ -82,10 +133,12 @@ export function useMqttModbusSession(editor, api = mqttModbusApi) {
   async function connect() {
     if (!ready.value || active.value) return
     const g = editor.activeGateway.value
+    const meter = editor.gatewayMeterCount(g.key) > 0
+    if (meter && !meterSupported.value) { error.value = '当前后端未声明支持电表，请更新 Java 服务。'; return }
     await mutate(async () => {
       const { key, name, gatewayId, brokerUrl, clientId, downTopic, upTopic } = g
       try {
-        const session = await api.open({ gateway: { key, name, gatewayId, brokerUrl, clientId: clientId || null, qos: Number(g.qos), downTopic: downTopic || null, upTopic: upTopic || null }, devices: devicePayload(key), username: username.value, password: password.value })
+        const session = await api.open({ gateway: { key, name, gatewayId, brokerUrl, clientId: clientId || null, qos: Number(g.qos), downTopic: meter ? METER_DOWN : downTopic || null, upTopic: meter ? METER_UP : upTopic || null }, kind: meter ? 'meter' : 'early', devices: meter ? [] : devicePayload(key), ...(meter ? { meters: meterPayloads(key) } : {}), username: username.value, password: password.value })
         hydrated.add(session.sessionId)
         sessions.value.push(session)
         log('连接', `${g.name} 已订阅 ${session.gateway.downTopic}，等待查询。`)
@@ -96,10 +149,10 @@ export function useMqttModbusSession(editor, api = mqttModbusApi) {
     const session = active.value
     if (session) await mutate(() => api.close(session.sessionId))
   }
-  async function applyProfile() {
-    const session = active.value
+  async function applyProfile(gatewayKey) {
+    const session = typeof gatewayKey === 'string' ? sessions.value.find(s => s.gateway.key === gatewayKey) : active.value
     if (session) await mutate(async () => {
-      const updated = await api.profile(session.sessionId, { expectedVersion: session.version, devices: devicePayload(session.gateway.key) })
+      const updated = await api.profile(session.sessionId, { expectedVersion: session.version, ...(session.kind === 'meter' ? { meters: meterPayloads(session.gateway.key) } : { devices: devicePayload(session.gateway.key) }) })
       sessions.value = sessions.value.map(s => s.sessionId === updated.sessionId ? updated : s)
       log('配置', `运行数据已更新到版本 ${updated.version}。`)
     })
@@ -109,5 +162,5 @@ export function useMqttModbusSession(editor, api = mqttModbusApi) {
     disposed = true; clearInterval(timer); password.value = ''; username.value = ''
     // 离开停止续租；后端 60 秒内回收，返回页面可在到期前恢复。
   })
-  return { sessions, busy, error, ready, username, password, active, topologyLocked, connect, stop, applyProfile, refresh }
+  return { meterSupported, meterDirty, sessions, busy, error, ready, username, password, active, topologyLocked, connect, stop, applyProfile, refresh }
 }
